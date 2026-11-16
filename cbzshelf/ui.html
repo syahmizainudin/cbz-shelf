@@ -597,6 +597,7 @@ async function poll() {
   try {
     const st = await fetch("/api/state").then(r => { if (signedOut(r)) throw new Error("signed out"); return r.json(); });
     applyCan(st.library_can);
+    if (st.library_prefs) serverText = st.library_prefs;
     const L = st.library, scan = L.scan;
     $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
     $("scanChip").hidden = !scan.running;
@@ -821,12 +822,14 @@ const THEMES = {
   sepia: ["#f4ecd8", "#4b3b2a", "#8a5a00"],
   dark: ["#15171c", "#d6d9df", "#8fb0ff"],
 };
+// Saved with your account (library_prefs in /api/state); this browser's copy fills in until it arrives.
+let serverText = null;
 function textSettings() {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches, sv = serverText || {};
   return {
-    size: Math.min(220, Math.max(70, +store.get("text.size", 100) || 100)),
-    width: store.get("text.width", "40"),
-    theme: store.get("text.theme", dark ? "dark" : "original"),
+    size: Math.min(220, Math.max(70, +(sv.text_size ?? store.get("text.size", 100)) || 100)),
+    width: sv.text_width ?? store.get("text.width", "40"),
+    theme: sv.text_theme ?? store.get("text.theme", dark ? "dark" : "original"),
   };
 }
 const tocList = () => (R.book.toc.length ? R.book.toc : R.book.spine.map((_, n) => ({ n, frag: "" })));
@@ -969,6 +972,9 @@ function textKey(e) {
 }
 function changeText(key, value) {
   store.set("text." + key, value);
+  if (key === "size") value = Math.min(220, Math.max(70, +value));
+  serverText = { ...(serverText || {}), ["text_" + key]: value };
+  post("prefs", { changes: { ["text_" + key]: value } }).catch(() => {});
   const keep = R.pos;
   styleChapter();
   R.pos = keep;

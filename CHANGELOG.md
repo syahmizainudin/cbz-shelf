@@ -4,6 +4,10 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.4.1
+
+- The text reader's size, line width and colours are saved per user in the library database (endpoint `prefs`, migration 4), so they follow you to another browser. This browser's copy is used until they load.
+
 ## 0.4.0
 
 - **Permissions for hosts with accounts:** `LibraryAPI(..., can=...)`. Editing book and series details needs `library.edit`; folders, scans and forgetting missing books need `library.manage`; everything else needs `library.read`. Refused actions get 403, and the page hides **Folders**, **Edit series** and the details form for users without them. Standalone, everything is allowed as before.

@@ -98,7 +98,7 @@ Your page is saved as you read. At the end of a book, the reader offers the next
 | Keys | ↑ ↓ scroll a little · Home / End first or last chapter · F full screen · Esc back |
 | Links | Links to other chapters open them here. Links to websites open in a new tab |
 
-Your chapter and how far down it you are are saved as you read. Text settings are remembered in this browser.
+Your chapter and how far down it you are are saved as you read. Text settings are saved in the library, per user.
 
 Chapters are shown in a frame that runs no scripts, and the server sends them with a Content-Security-Policy that blocks scripts, forms and anything from outside, so a book can't run code or contact other sites.
 

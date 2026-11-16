@@ -117,7 +117,15 @@ MIGRATIONS = [
     """CREATE TABLE reader_prefs (
            user_id INTEGER NOT NULL, series_id INTEGER NOT NULL, prefs_json TEXT NOT NULL DEFAULT '{}',
            PRIMARY KEY (user_id, series_id))""",
+    # 4 (0.4.1): each user's own text reader settings (size, line width, colours).
+    """CREATE TABLE user_prefs (user_id INTEGER PRIMARY KEY, prefs_json TEXT NOT NULL DEFAULT '{}')""",
 ]
+# The text reader's settings: name -> check. None as a value removes a setting.
+TEXT_PREFS = {
+    "text_size": lambda v: isinstance(v, int) and not isinstance(v, bool) and 70 <= v <= 220,
+    "text_width": lambda v: v in ("32", "40", "56"),
+    "text_theme": lambda v: v in ("original", "light", "sepia", "dark"),
+}
 
 
 def default_db() -> Path:
@@ -753,6 +761,30 @@ class Library:
                 (int(user), int(series_id), json.dumps(prefs)),
             )
         return self.series_detail(series_id, user=user)["reader"]
+
+    def user_prefs(self, user: int = 0) -> dict:
+        row = self._one("SELECT prefs_json FROM user_prefs WHERE user_id = ?", (int(user),))
+        return json.loads(row["prefs_json"]) if row else {}
+
+    def set_user_prefs(self, changes: dict, user: int = 0) -> dict:
+        """One user's text reader settings (``TEXT_PREFS``)."""
+        prefs = self.user_prefs(user)
+        for key, value in changes.items():
+            if key not in TEXT_PREFS:
+                raise ValueError(f"unknown setting: {key}")
+            if value is None:
+                prefs.pop(key, None)
+            elif not TEXT_PREFS[key](value):
+                raise ValueError(f"bad value for {key}")
+            else:
+                prefs[key] = value
+        with self._lock:
+            self._db.execute(
+                """INSERT INTO user_prefs(user_id, prefs_json) VALUES (?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET prefs_json = excluded.prefs_json""",
+                (int(user), json.dumps(prefs)),
+            )
+        return prefs
 
     # ------------------------------------------------------------ favourites
     def _is_favourite(self, user: int, kind: str, item_id: int) -> bool:

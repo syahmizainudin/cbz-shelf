@@ -73,6 +73,7 @@ class LibraryAPI:
         return {
             "library": self.lib.summary(),
             "library_can": {"edit": self.can(EDIT), "manage": self.can(MANAGE)},
+            "library_prefs": self.lib.user_prefs(int(self.user_of())),
         }
 
     def get(self, action: str, query: dict) -> tuple[int, dict, bytes]:
@@ -175,6 +176,8 @@ class LibraryAPI:
                 if not isinstance(on, bool):
                     raise ValueError("on must be true or false")
                 return 200, {"favourite": lib.set_favourite(kind, int(body["id"]), on, user=user)}
+            if action == "prefs":
+                return 200, lib.set_user_prefs(body.get("changes") or {}, user=user)
             if action == "reader-settings":
                 return 200, lib.set_reader_prefs(int(body["id"]), body.get("changes") or {}, user=user)
             if action == "hide-continue":

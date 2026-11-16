@@ -186,6 +186,15 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.lib.set_reader_prefs(999, {}, user=2)
 
+    def test_text_reader_prefs_per_user(self):
+        prefs = self.lib.set_user_prefs({"text_size": 120, "text_theme": "sepia"}, user=4)
+        self.assertEqual(prefs, {"text_size": 120, "text_theme": "sepia"})
+        self.assertEqual(self.lib.user_prefs(), {})
+        self.assertEqual(self.lib.set_user_prefs({"text_theme": None}, user=4), {"text_size": 120})
+        for bad in ({"text_size": 500}, {"text_size": True}, {"text_width": "99"}, {"font": "x"}):
+            with self.assertRaises(ValueError):
+                self.lib.set_user_prefs(bad, user=4)
+
     def test_removing_a_folder_forgets_its_favourites(self):
         self.lib.set_favourite("series", self.series("Naruto")["id"])
         self.lib.set_favourite("book", self.book("Saga 001")["id"])
