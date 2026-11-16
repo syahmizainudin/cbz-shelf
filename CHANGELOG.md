@@ -4,15 +4,14 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.2.0
+
 - EPUB books:
   - Picture EPUBs (manga, comics) open in the comic reader, right to left when the book says so.
   - Text EPUBs open in a new text reader: contents, text size, line width, the book's colours or Light, Sepia or Dark, and progress saved by chapter and position.
   - Title, authors, subjects, publisher, language, year, description and series are read from the book. A book without a cover picture gets a plain cover with its title.
   - Chapters can't run scripts or contact other sites: they are sent with a strict Content-Security-Policy and shown in a sandboxed frame.
 - The database gets versioned migrations. Opening an older library adds the new columns and keeps everything in it.
-
-## 0.1.2
-
 - In a frame, the reader tells the parent page when a book opens and closes (`postMessage` `{type: "shelf-reader", open}`, same origin), so harbor can give it the whole window.
 - A series with one book no longer shows its cover twice: the series page's top cover is left out when the book's card already shows it.
 
