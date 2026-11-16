@@ -37,9 +37,17 @@ def _json(obj, status: int = 200) -> tuple[int, dict, bytes]:
     return status, {"Content-Type": "application/json"}, json.dumps(obj).encode()
 
 
+def _flag(query: dict, key: str) -> bool:
+    return str(query.get(key, "")).lower() in ("1", "true", "yes")
+
+
 class LibraryAPI:
-    def __init__(self, library: Library):
+    """The library's endpoints. ``user_of()`` names the user each request acts for: reading
+    progress, Continue reading and favourites are kept per user. Without accounts it is user 0."""
+
+    def __init__(self, library: Library, user_of=None):
         self.lib = library
+        self.user_of = user_of or (lambda: 0)
 
     def state(self) -> dict:
         return {"library": self.lib.summary()}
@@ -49,19 +57,23 @@ class LibraryAPI:
         limit = min(_int(query, "limit", 60), MAX_LIMIT)
         offset = max(_int(query, "offset", 0), 0)
         filters = {k: query.get(k, "") for k in ("q", "tag", "author")}
+        user = int(self.user_of())
+        mine = {"favourite": _flag(query, "favourite"), "user": user}
         try:
             if action == "series":
                 return _json(
-                    lib.series_list(**filters, sort=query.get("sort", "name"), limit=limit, offset=offset)
+                    lib.series_list(
+                        **filters, **mine, sort=query.get("sort", "name"), limit=limit, offset=offset
+                    )
                 )
             if action == "series-detail":
-                return _json(lib.series_detail(_int(query, "id")))
+                return _json(lib.series_detail(_int(query, "id"), user=user))
             if action == "book":
-                return _json(lib.book_detail(_int(query, "id")))
+                return _json(lib.book_detail(_int(query, "id"), user=user))
             if action == "search":
-                return _json(lib.search(**filters, limit=limit, offset=offset))
+                return _json(lib.search(**filters, **mine, limit=limit, offset=offset))
             if action == "continue":
-                return _json(lib.continue_reading(min(limit, 30)))
+                return _json(lib.continue_reading(min(limit, 30), user=user))
             if action == "facets":
                 return _json(lib.facets())
             if action == "roots":
@@ -99,6 +111,7 @@ class LibraryAPI:
 
     def post(self, action: str, body: dict) -> tuple[int, dict]:
         lib = self.lib
+        user = int(self.user_of())
         try:
             if action == "add-root":
                 return 200, lib.add_root(str(body.get("path", "")))
@@ -125,10 +138,20 @@ class LibraryAPI:
                     int(body.get("page", 0)),
                     None if finished is None else bool(finished),
                     float(body.get("pos") or 0),
+                    user=user,
                 )
             if action == "clear-progress":
-                lib.clear_progress(int(body["id"]))
+                lib.clear_progress(int(body["id"]), user=user)
                 return 200, {"ok": True}
+            if action == "favourite":
+                kind, on = str(body.get("kind", "")), body.get("on", True)
+                if not isinstance(on, bool):
+                    raise ValueError("on must be true or false")
+                return 200, {"favourite": lib.set_favourite(kind, int(body["id"]), on, user=user)}
+            if action == "hide-continue":
+                return 200, {"hidden": lib.hide_continue(int(body["id"]), user=user)}
+            if action == "clear-continue":
+                return 200, {"hidden": lib.hide_continue(None, user=user)}
         except KeyError as e:
             if not str(e).startswith(("'no ", '"no ')):
                 raise  # a missing field: the server answers 400

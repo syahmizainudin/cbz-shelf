@@ -111,6 +111,58 @@ class LibraryTests(unittest.TestCase):
     def book(self, title):
         return next(b for b in self.lib.search(limit=200)["items"] if b["title"] == title)
 
+    def test_favourites(self):
+        naruto, saga1 = self.series("Naruto"), self.book("Saga 001")
+        self.assertTrue(self.lib.set_favourite("series", naruto["id"]))
+        self.lib.set_favourite("book", saga1["id"])
+        self.lib.set_favourite("book", saga1["id"])  # twice is fine
+        self.assertEqual([s["name"] for s in self.lib.series_list(favourite=True)["items"]], ["Naruto"])
+        self.assertEqual([b["title"] for b in self.lib.search(favourite=True)["items"]], ["Saga 001"])
+        self.assertTrue(self.series("Naruto")["favourite"])
+        self.assertTrue(self.lib.series_detail(naruto["id"])["favourite"])
+        self.assertTrue(self.lib.book_detail(saga1["id"])["favourite"])
+        self.assertFalse(self.lib.set_favourite("book", saga1["id"], on=False))
+        self.assertEqual(self.lib.search(favourite=True)["total"], 0)
+        with self.assertRaises(ValueError):
+            self.lib.set_favourite("folder", 1)
+        with self.assertRaises(KeyError):
+            self.lib.set_favourite("book", 9999)
+
+    def test_continue_reading_hide_and_clear_keep_progress(self):
+        v1, v2 = self.book("Naruto v01"), self.book("Naruto v02")
+        self.lib.set_progress(v1["id"], 1)
+        self.lib.set_progress(v2["id"], 1)
+        self.assertEqual(len(self.lib.continue_reading()), 2)
+        self.assertEqual(self.lib.hide_continue(v1["id"]), 1)
+        self.assertEqual([b["id"] for b in self.lib.continue_reading()], [v2["id"]])
+        self.assertEqual(self.lib.book_detail(v1["id"])["progress"]["page"], 1)  # page kept
+        self.lib.set_progress(v1["id"], 0)  # reading it again brings it back
+        self.assertIn(v1["id"], [b["id"] for b in self.lib.continue_reading()])
+        self.assertEqual(self.lib.hide_continue(), 2)
+        self.assertEqual(self.lib.continue_reading(), [])
+        self.assertEqual(self.lib.book_detail(v2["id"])["progress"]["page"], 1)
+
+    def test_progress_and_favourites_are_per_user(self):
+        v1 = self.book("Naruto v01")
+        self.lib.set_progress(v1["id"], 1, user=1)
+        self.lib.set_favourite("book", v1["id"], user=1)
+        self.assertIsNone(self.lib.book_detail(v1["id"])["progress"])  # user 0 sees nothing
+        self.assertFalse(self.lib.book_detail(v1["id"])["favourite"])
+        self.assertEqual(self.lib.continue_reading(), [])
+        self.assertEqual(self.lib.book_detail(v1["id"], user=1)["progress"]["page"], 1)
+        self.assertEqual([b["id"] for b in self.lib.continue_reading(user=1)], [v1["id"]])
+        self.lib.set_progress(v1["id"], 0)
+        self.lib.hide_continue(user=0)
+        self.assertEqual(len(self.lib.continue_reading(user=1)), 1)  # one user's clear leaves others alone
+        self.lib.clear_progress(v1["id"], user=1)
+        self.assertEqual(self.lib.book_detail(v1["id"])["progress"]["page"], 0)
+
+    def test_removing_a_folder_forgets_its_favourites(self):
+        self.lib.set_favourite("series", self.series("Naruto")["id"])
+        self.lib.set_favourite("book", self.book("Saga 001")["id"])
+        self.lib.remove_root(self.lib.roots()[0]["id"])
+        self.assertEqual(self.lib._q("SELECT count(*) FROM favourites")[0][0], 0)
+
     def test_scan_builds_series(self):
         names = sorted((s["name"] for s in self.lib.series_list()["items"]), key=str.lower)
         self.assertEqual(names, ["deep", "Misc", "Naruto", "Saga"])  # ComicInfo Series wins over the folder

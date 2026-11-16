@@ -93,6 +93,25 @@ MIGRATIONS = [
     # 1 (0.2.0): EPUB books, and a position inside a text book's chapter.
     """ALTER TABLE books ADD COLUMN kind TEXT NOT NULL DEFAULT 'cbz';   -- cbz | epub-image | epub-text
        ALTER TABLE progress ADD COLUMN pos REAL NOT NULL DEFAULT 0;      -- 0-1 down the chapter (text books)""",
+    # 2 (0.3.0): progress per user (rows so far belong to user 0, the only user without accounts),
+    # hiding a book from Continue reading, and favourites. Statements are split on semicolons.
+    """CREATE TABLE progress2 (
+           user_id INTEGER NOT NULL DEFAULT 0,
+           book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+           page INTEGER NOT NULL, pos REAL NOT NULL DEFAULT 0, finished INTEGER NOT NULL DEFAULT 0,
+           hidden INTEGER NOT NULL DEFAULT 0,   -- 1 = left out of Continue reading, progress kept
+           updated_at REAL NOT NULL,
+           PRIMARY KEY (user_id, book_id));
+       INSERT INTO progress2(user_id, book_id, page, pos, finished, updated_at)
+           SELECT 0, book_id, page, pos, finished, updated_at FROM progress;
+       DROP TABLE progress;
+       ALTER TABLE progress2 RENAME TO progress;
+       CREATE INDEX progress_updated ON progress(user_id, updated_at);
+       CREATE INDEX progress_book ON progress(book_id);
+       CREATE TABLE favourites (
+           user_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('series', 'book')),
+           item_id INTEGER NOT NULL, added_at REAL NOT NULL,
+           PRIMARY KEY (user_id, kind, item_id))""",
 ]
 
 
@@ -219,6 +238,7 @@ class Library:
             self._db.execute("DELETE FROM books WHERE root_id = ?", (root_id,))
             self._db.execute("DELETE FROM series WHERE root_id = ?", (root_id,))
             n = self._db.execute("DELETE FROM roots WHERE id = ?", (root_id,)).rowcount
+            self._drop_orphan_favourites()
             self._db.execute("COMMIT")
         return bool(n)
 
@@ -420,6 +440,16 @@ class Library:
     def _drop_empty_series(self) -> None:
         with self._lock:
             self._db.execute("DELETE FROM series WHERE id NOT IN (SELECT DISTINCT series_id FROM books)")
+            self._drop_orphan_favourites()
+
+    def _drop_orphan_favourites(self) -> None:
+        """Favourites of books or series that no longer exist. Call with the lock held."""
+        self._db.execute(
+            "DELETE FROM favourites WHERE kind = 'book' AND item_id NOT IN (SELECT id FROM books)"
+        )
+        self._db.execute(
+            "DELETE FROM favourites WHERE kind = 'series' AND item_id NOT IN (SELECT id FROM series)"
+        )
 
     def _reindex(self, book_id: int) -> None:
         """Refresh one book's search entry. Call with the lock held."""
@@ -475,6 +505,8 @@ class Library:
             "file": Path(r["path"]).name,
             "kind": r["kind"],
         }
+        if "favourite" in r.keys():
+            d["favourite"] = bool(r["favourite"])
         if "page" in r.keys():
             d["progress"] = (
                 None
@@ -488,11 +520,15 @@ class Library:
             )
         return d
 
+    # Progress and favourites are per user: queries using BOOK_FROM pass the user id twice, first.
     BOOK_COLS = (
         "b.id, b.series_id, b.path, b.meta_json, b.pages, b.missing, b.error, b.mtime, b.kind,"
-        " p.page, p.pos, p.finished, p.updated_at"
+        " p.page, p.pos, p.finished, p.updated_at, f.item_id IS NOT NULL AS favourite"
     )
-    BOOK_FROM = "books b LEFT JOIN progress p ON p.book_id = b.id"
+    BOOK_FROM = (
+        "books b LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?"
+        " LEFT JOIN favourites f ON f.kind = 'book' AND f.item_id = b.id AND f.user_id = ?"
+    )
 
     def series_list(
         self,
@@ -502,8 +538,13 @@ class Library:
         sort: str = "name",
         limit: int = 60,
         offset: int = 0,
+        favourite: bool = False,
+        user: int = 0,
     ) -> dict:
         where, args = ["1=1"], []
+        if favourite:
+            where.append("s.id IN (SELECT item_id FROM favourites WHERE kind = 'series' AND user_id = ?)")
+            args.append(int(user))
         if q:
             where.append(
                 "s.id IN (SELECT b.series_id FROM books b WHERE b.id IN (SELECT rowid FROM book_search WHERE book_search MATCH ?))"
@@ -527,25 +568,28 @@ class Library:
                    sum(b.missing) AS missing,
                    max(b.added_at) AS added, max(p.updated_at) AS last_read,
                    (SELECT b2.id FROM books b2 WHERE b2.series_id = s.id AND b2.missing = 0 ORDER BY b2.sort_key LIMIT 1) AS cover_book,
-                   (SELECT CAST(b2.mtime AS INTEGER) FROM books b2 WHERE b2.series_id = s.id AND b2.missing = 0 ORDER BY b2.sort_key LIMIT 1) AS cover_v
-            FROM series s JOIN books b ON b.series_id = s.id LEFT JOIN progress p ON p.book_id = b.id
+                   (SELECT CAST(b2.mtime AS INTEGER) FROM books b2 WHERE b2.series_id = s.id AND b2.missing = 0 ORDER BY b2.sort_key LIMIT 1) AS cover_v,
+                   EXISTS (SELECT 1 FROM favourites fv WHERE fv.kind = 'series' AND fv.item_id = s.id AND fv.user_id = ?) AS favourite
+            FROM series s JOIN books b ON b.series_id = s.id LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?
             WHERE {" AND ".join(where)}
             GROUP BY s.id ORDER BY {order} LIMIT ? OFFSET ?"""
         total_sql = f"SELECT count(*) FROM series s WHERE {' AND '.join(where)}"
-        items = [dict(r) for r in self._q(sql, (*args, int(limit), int(offset)))]
+        items = [dict(r) for r in self._q(sql, (int(user), int(user), *args, int(limit), int(offset)))]
+        for it in items:
+            it["favourite"] = bool(it["favourite"])
         total = self._one(total_sql, args)[0]
         return {"items": items, "total": total}
 
-    def series_detail(self, series_id: int) -> dict:
+    def series_detail(self, series_id: int, user: int = 0) -> dict:
         s = self._one("SELECT * FROM series WHERE id = ?", (series_id,))
         if not s:
             raise KeyError(f"no series {series_id}")
-        user = json.loads(s["user_json"])
+        edits = json.loads(s["user_json"])
         books = [
             self._book_dict(r)
             for r in self._q(
                 f"SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM} WHERE b.series_id = ? ORDER BY b.sort_key",
-                (series_id,),
+                (int(user), int(user), series_id),
             )
         ]
         rtl_votes = [
@@ -562,23 +606,24 @@ class Library:
             "id": s["id"],
             "folder": s["folder"],
             "file_name": s["file_name"],
-            "name": user.get("name") or s["file_name"],
-            "summary": user.get("summary", ""),
-            "user": user,
-            "authors": user.get("authors") or authors,
-            "tags": user.get("tags") or tags,
+            "name": edits.get("name") or s["file_name"],
+            "summary": edits.get("summary", ""),
+            "user": edits,
+            "authors": edits.get("authors") or authors,
+            "tags": edits.get("tags") or tags,
             "reader": {
-                "rtl": user.get("rtl", file_rtl),
-                "mode": user.get("mode", "single"),
-                "fit": user.get("fit", "height"),
+                "rtl": edits.get("rtl", file_rtl),
+                "mode": edits.get("mode", "single"),
+                "fit": edits.get("fit", "height"),
             },
             "books": books,
+            "favourite": self._is_favourite(user, "series", s["id"]),
         }
 
-    def book_detail(self, book_id: int) -> dict:
+    def book_detail(self, book_id: int, user: int = 0) -> dict:
         r = self._one(
             f"SELECT {self.BOOK_COLS}, b.file_json, b.user_json FROM {self.BOOK_FROM} WHERE b.id = ?",
-            (book_id,),
+            (int(user), int(user), book_id),
         )
         if not r:
             raise KeyError(f"no book {book_id}")
@@ -596,8 +641,20 @@ class Library:
                 d["toc"], d["spine"] = [], []
         return d
 
-    def search(self, q: str = "", tag: str = "", author: str = "", limit: int = 60, offset: int = 0) -> dict:
+    def search(
+        self,
+        q: str = "",
+        tag: str = "",
+        author: str = "",
+        limit: int = 60,
+        offset: int = 0,
+        favourite: bool = False,
+        user: int = 0,
+    ) -> dict:
         where, args = ["1=1"], []
+        if favourite:
+            where.append("b.id IN (SELECT item_id FROM favourites WHERE kind = 'book' AND user_id = ?)")
+            args.append(int(user))
         if q:
             where.append("b.id IN (SELECT rowid FROM book_search WHERE book_search MATCH ?)")
             args.append(_fts_query(q))
@@ -610,18 +667,60 @@ class Library:
         w = " AND ".join(where)
         rows = self._q(
             f"SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM} WHERE {w} ORDER BY b.sort_key LIMIT ? OFFSET ?",
-            (*args, int(limit), int(offset)),
+            (int(user), int(user), *args, int(limit), int(offset)),
         )
         total = self._one(f"SELECT count(*) FROM books b WHERE {w}", args)[0]
         return {"items": [self._book_dict(r) for r in rows], "total": total}
 
-    def continue_reading(self, limit: int = 12) -> list[dict]:
+    def continue_reading(self, limit: int = 12, user: int = 0) -> list[dict]:
         rows = self._q(
             f"""SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM}
-                WHERE p.finished = 0 AND b.missing = 0 ORDER BY p.updated_at DESC LIMIT ?""",
-            (int(limit),),
+                WHERE p.finished = 0 AND p.hidden = 0 AND b.missing = 0 ORDER BY p.updated_at DESC LIMIT ?""",
+            (int(user), int(user), int(limit)),
         )
         return [self._book_dict(r) for r in rows]
+
+    def hide_continue(self, book_id: int | None = None, user: int = 0) -> int:
+        """Leave a book (or, with no id, every book) out of Continue reading. The progress is kept,
+        and reading the book again brings it back. Returns how many were hidden."""
+        with self._lock:
+            if book_id is None:
+                sql, args = "UPDATE progress SET hidden = 1 WHERE user_id = ? AND hidden = 0", (int(user),)
+            else:
+                sql, args = (
+                    "UPDATE progress SET hidden = 1 WHERE user_id = ? AND book_id = ?",
+                    (int(user), int(book_id)),
+                )
+            return self._db.execute(sql, args).rowcount
+
+    # ------------------------------------------------------------ favourites
+    def _is_favourite(self, user: int, kind: str, item_id: int) -> bool:
+        return bool(
+            self._one(
+                "SELECT 1 FROM favourites WHERE user_id = ? AND kind = ? AND item_id = ?",
+                (int(user), kind, int(item_id)),
+            )
+        )
+
+    def set_favourite(self, kind: str, item_id: int, on: bool = True, user: int = 0) -> bool:
+        """Star or unstar a book or series. Returns the new state."""
+        if kind not in ("series", "book"):
+            raise ValueError("kind must be series or book")
+        table = "series" if kind == "series" else "books"
+        if not self._one(f"SELECT 1 FROM {table} WHERE id = ?", (int(item_id),)):
+            raise KeyError(f"no {kind} {item_id}")
+        with self._lock:
+            if on:
+                self._db.execute(
+                    "INSERT OR IGNORE INTO favourites(user_id, kind, item_id, added_at) VALUES (?,?,?,?)",
+                    (int(user), kind, int(item_id), time.time()),
+                )
+            else:
+                self._db.execute(
+                    "DELETE FROM favourites WHERE user_id = ? AND kind = ? AND item_id = ?",
+                    (int(user), kind, int(item_id)),
+                )
+        return bool(on)
 
     def facets(self, limit: int = 200) -> dict:
         out = {}
@@ -700,7 +799,9 @@ class Library:
                     self._reindex(b["id"])
         return self.series_detail(series_id)
 
-    def set_progress(self, book_id: int, page: int, finished: bool | None = None, pos: float = 0.0) -> dict:
+    def set_progress(
+        self, book_id: int, page: int, finished: bool | None = None, pos: float = 0.0, user: int = 0
+    ) -> dict:
         """Save where the reader is. ``page`` is a page, or a chapter in a text book, where ``pos``
         (0-1) is how far down that chapter."""
         r = self._one("SELECT pages, kind FROM books WHERE id = ?", (book_id,))
@@ -713,16 +814,16 @@ class Library:
             finished = last and (r["kind"] != "epub-text" or pos >= 0.98)
         with self._lock:
             self._db.execute(
-                """INSERT INTO progress(book_id, page, pos, finished, updated_at) VALUES (?,?,?,?,?)
-                   ON CONFLICT(book_id) DO UPDATE SET page=excluded.page, pos=excluded.pos,
-                   finished=excluded.finished, updated_at=excluded.updated_at""",
-                (book_id, page, pos, int(bool(finished)), time.time()),
+                """INSERT INTO progress(user_id, book_id, page, pos, finished, hidden, updated_at) VALUES (?,?,?,?,?,0,?)
+                   ON CONFLICT(user_id, book_id) DO UPDATE SET page=excluded.page, pos=excluded.pos,
+                   finished=excluded.finished, hidden=0, updated_at=excluded.updated_at""",
+                (int(user), book_id, page, pos, int(bool(finished)), time.time()),
             )
         return {"page": page, "pos": pos, "finished": bool(finished)}
 
-    def clear_progress(self, book_id: int) -> None:
+    def clear_progress(self, book_id: int, user: int = 0) -> None:
         with self._lock:
-            self._db.execute("DELETE FROM progress WHERE book_id = ?", (book_id,))
+            self._db.execute("DELETE FROM progress WHERE user_id = ? AND book_id = ?", (int(user), book_id))
 
     # ------------------------------------------------------------ pages and covers
     def _book_file(self, book_id: int) -> sqlite3.Row:

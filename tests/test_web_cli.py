@@ -130,6 +130,23 @@ class WebTests(Base):
         self.assertEqual(self.post("edit-series", {"id": 999, "changes": {}})[0], 404)
         self.assertEqual(self.post("clear-progress", {"id": b1})[2], {"ok": True})
 
+    def test_favourites_and_continue_endpoints(self):
+        b1, b2 = self.book_ids()
+        sid = self.get("series")[2]["items"][0]["id"]
+        self.assertEqual(self.post("favourite", {"kind": "series", "id": sid})[2], {"favourite": True})
+        self.assertEqual(
+            self.post("favourite", {"kind": "book", "id": b2, "on": True})[2], {"favourite": True}
+        )
+        self.assertEqual(self.get("series", favourite=1)[2]["total"], 1)
+        self.assertEqual([b["id"] for b in self.get("search", favourite=1)[2]["items"]], [b2])
+        self.assertEqual(self.post("favourite", {"kind": "book", "id": b2, "on": "no"})[0], 400)
+        self.assertEqual(self.post("favourite", {"kind": "book", "id": 999})[0], 404)
+        self.post("progress", {"id": b1, "page": 1})
+        self.assertEqual(self.post("hide-continue", {"id": b1})[2], {"hidden": 1})
+        self.assertEqual(self.get("continue")[2], [])
+        self.post("progress", {"id": b2, "page": 1})
+        self.assertEqual(self.post("clear-continue", {})[2], {"hidden": 1})
+
     def test_roots_endpoints(self):
         other = self.dir / "Other"
         make_cbz(other / "x.cbz")

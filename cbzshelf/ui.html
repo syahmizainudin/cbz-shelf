@@ -48,6 +48,14 @@
   .cover .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.35); }
   .cover .bar i { display: block; height: 100%; background: var(--accent); }
   .cover.missing::after { content: "missing"; position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55); color: #fff; font-weight: 600; }
+  .cover .star, .cover .x { position: absolute; top: 6px; width: 28px; height: 28px; padding: 0; border: none; border-radius: 999px;
+                             background: rgba(0,0,0,.6); color: #fff; font-size: 16px; line-height: 28px; text-align: center; opacity: 0; transition: opacity .15s; }
+  .cover .star { left: 6px; }
+  .cover .x { right: 6px; }
+  .card:hover .star, .card:hover .x, .card:focus-within .star, .card:focus-within .x, .cover .star.on { opacity: 1; }
+  .cover .star.on { color: #ffd34d; }
+  @media (hover: none) { .cover .star, .cover .x { opacity: 1; } }
+  button.fav-toggle[aria-pressed="true"] { background: var(--chip); border-color: #d4a017; }
   .card .t { margin-top: 6px; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .s { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .empty { color: var(--muted); padding: 30px 0; text-align: center; }
@@ -141,6 +149,7 @@
     <select id="sort" aria-label="Sort series">
       <option value="name">Sort: name</option><option value="recent">Sort: recently read</option><option value="added">Sort: recently added</option>
     </select>
+    <button id="favFilter" class="fav-toggle" aria-pressed="false" title="Only favourites">★ Favourites</button>
     <button class="link" id="clearFilters" hidden>Clear filters</button>
     <span class="muted" id="counts"></span>
   </div>
@@ -153,7 +162,7 @@
   <div class="dlg-head"><strong id="bookDlgTitle">Book</strong><button class="link" data-close>Close</button></div>
   <div class="dlg-body">
     <div class="book-layout">
-      <div><div class="cover" id="bookCover"></div><div class="actions"><button class="primary" id="bookRead">Read</button><button id="bookRestart">From the start</button></div><div class="actions"><button class="link" id="bookMark"></button></div></div>
+      <div><div class="cover" id="bookCover"></div><div class="actions"><button class="primary" id="bookRead">Read</button><button id="bookRestart">From the start</button></div><div class="actions"><button class="link" id="bookMark"></button> <button class="link" id="bookFav"></button></div></div>
       <form class="form" id="bookForm">
         <label for="f-title">Title</label><input type="text" id="f-title" name="title">
         <label for="f-volume">Volume</label><input type="text" id="f-volume" name="volume" inputmode="decimal">
@@ -262,12 +271,15 @@ const numLabel = b => [b.volume != null ? `Vol. ${b.volume}` : "", b.number != n
 for (const d of document.querySelectorAll("dialog")) d.addEventListener("click", e => { if (e.target.matches("[data-close]")) d.close(); });
 
 /* ------------------------------------------------------------------ cards */
-function bookCard(b, sub) {
+const starBtn = (kind, id, on) =>
+  `<button class="star${on ? " on" : ""}" data-fav="${kind}:${id}" aria-pressed="${!!on}" title="${on ? "Remove from favourites" : "Add to favourites"}">${on ? "★" : "☆"}</button>`;
+function bookCard(b, sub, inContinue) {
   const p = b.progress;
   const done = p ? (isText(b) ? p.page + (p.pos || 0) : p.page + 1) : 0;
   const pct = p && b.pages ? Math.round(100 * (p.finished ? 1 : done / b.pages)) : 0;
   return `<div class="card" data-book="${b.id}">
-    <div class="cover${b.missing ? " missing" : ""}">${b.missing ? "" : `<img loading="lazy" src="${thumb(b)}" alt="">`}
+    <div class="cover${b.missing ? " missing" : ""}">${b.missing ? "" : `<img loading="lazy" src="${thumb(b)}" alt="">`}${starBtn("book", b.id, b.favourite)}
+      ${inContinue ? `<button class="x" data-hide="${b.id}" title="Remove from Continue reading (your page is kept)">×</button>` : ""}
       ${p?.finished ? `<span class="badge">read</span>` : ""}${pct && !p.finished ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>
     <div class="t" title="${esc(b.title)}">${esc(b.title)}</div>
     <div class="s">${esc(sub ?? (numLabel(b) || unit(b, b.pages)))} · <button class="link" data-info="${b.id}">details</button></div></div>`;
@@ -275,11 +287,15 @@ function bookCard(b, sub) {
 function seriesCard(s) {
   return `<div class="card" data-series="${s.id}">
     <div class="cover">${s.cover_book ? `<img loading="lazy" src="${API}thumb?book=${s.cover_book}&v=${s.cover_v}" alt="">` : ""}
-      <span class="badge">${s.books}</span></div>
+      <span class="badge">${s.books}</span>${starBtn("series", s.id, s.favourite)}</div>
     <div class="t" title="${esc(s.name)}">${esc(s.name)}</div>
     <div class="s">${s.finished ? `${s.finished}/${s.books} read` : `${s.books} book${s.books === 1 ? "" : "s"}`}${s.missing ? ` · ${s.missing} missing` : ""}</div></div>`;
 }
 $("view").addEventListener("click", e => {
+  const fav = e.target.closest("[data-fav]");
+  if (fav) { e.stopPropagation(); return toggleFavourite(fav); }
+  const hide = e.target.closest("[data-hide]");
+  if (hide) { e.stopPropagation(); return hideContinue(+hide.dataset.hide); }
   const info = e.target.closest("[data-info]");
   if (info) { e.stopPropagation(); return openBook(+info.dataset.info); }
   const tag = e.target.closest("[data-tag]");
@@ -296,23 +312,31 @@ $("view").addEventListener("click", e => {
 
 /* ------------------------------------------------------------------ views */
 let seriesOffset = 0, current = { series: null };
-const filters = () => ({ q: $("q").value.trim(), tag: $("tagFilter").value, author: $("authorFilter").value });
-function filtering() { const f = filters(); return !!(f.q || f.tag || f.author); }
+const filters = () => ({ q: $("q").value.trim(), tag: $("tagFilter").value, author: $("authorFilter").value,
+                         favourite: $("favFilter").getAttribute("aria-pressed") === "true" ? 1 : "" });
+function filtering() { const f = filters(); return !!(f.q || f.tag || f.author || f.favourite); }
 
 async function showHome(append = false) {
   const f = filters();
   $("clearFilters").hidden = !filtering();
   if (!append) seriesOffset = 0;
   try {
-    const [series, cont] = await Promise.all([
+    const home = !append && !filtering();
+    const [series, cont, favSeries, favBooks] = await Promise.all([
       get("series", { ...f, sort: $("sort").value, limit: 60, offset: seriesOffset }),
-      append || filtering() ? null : get("continue"),
+      home ? get("continue") : null,
+      home ? get("series", { favourite: 1, limit: 30 }) : null,
+      home ? get("search", { favourite: 1, limit: 30 }) : null,
     ]);
     let html = "";
     if (cont && cont.length) {
-      html += `<h2>Continue reading</h2><div class="row-scroll">${cont.map(b => bookCard(b, `${isText(b) ? "chapter" : "page"} ${b.progress.page + 1} of ${b.pages}`)).join("")}</div>`;
+      html += `<h2>Continue reading <button class="link" data-act="clearContinue" title="Empty this row. Your pages are kept.">Clear all</button></h2>
+        <div class="row-scroll">${cont.map(b => bookCard(b, `${isText(b) ? "chapter" : "page"} ${b.progress.page + 1} of ${b.pages}`, true)).join("")}</div>`;
     }
-    if (filtering() && f.q && !append) {
+    if (favSeries && (favSeries.items.length || favBooks.items.length)) {
+      html += `<h2>Favourites</h2><div class="row-scroll">${favSeries.items.map(seriesCard).join("")}${favBooks.items.map(b => bookCard(b)).join("")}</div>`;
+    }
+    if (filtering() && (f.q || f.favourite) && !append) {
       const books = await get("search", { ...f, limit: 60 });
       html += `<h2>Books <span class="chip">${books.total}</span></h2>` +
         (books.items.length ? `<div class="grid">${books.items.map(b => bookCard(b)).join("")}</div>` : `<div class="empty">No books match.</div>`);
@@ -349,6 +373,7 @@ async function showSeries(id) {
           ${s.summary ? `<p>${esc(s.summary)}</p>` : ""}
           <div class="actions">
             ${next ? `<button class="primary" data-book="${next.id}">${next.progress ? "Continue" : "Read"} ${esc(numLabel(next) || next.title)}</button>` : ""}
+            <button data-fav="series:${s.id}" class="fav-toggle" aria-pressed="${s.favourite}">${s.favourite ? "★ Favourite" : "☆ Favourite"}</button>
             <button data-act="editSeries">Edit series</button>
             <span class="muted">Reader: ${s.reader.rtl ? "right to left" : "left to right"}, ${s.reader.mode}</span>
           </div>
@@ -360,6 +385,11 @@ async function showSeries(id) {
 
 const actions = {
   more: () => showHome(true),
+  clearContinue: async () => {
+    if (!confirm("Empty Continue reading? Your pages are kept, and a book comes back when you read it again.")) return;
+    await post("clear-continue", {}).catch(e => alert(e.message));
+    showHome();
+  },
   editSeries: () => openSeriesEdit(),
 };
 function route() {
@@ -376,7 +406,28 @@ function applyFilters() { if (location.hash) location.hash = ""; showHome(); }
 for (const id of ["tagFilter", "authorFilter", "sort"]) $(id).onchange = applyFilters;
 $("sort").value = store.get("sort", "name");
 $("sort").addEventListener("change", () => store.set("sort", $("sort").value));
-$("clearFilters").onclick = () => { $("q").value = ""; $("tagFilter").value = ""; $("authorFilter").value = ""; applyFilters(); };
+$("clearFilters").onclick = () => { $("q").value = ""; $("tagFilter").value = ""; $("authorFilter").value = ""; $("favFilter").setAttribute("aria-pressed", "false"); applyFilters(); };
+$("favFilter").onclick = () => {
+  const b = $("favFilter");
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+  applyFilters();
+};
+async function toggleFavourite(btn) {
+  const [kind, id] = btn.dataset.fav.split(":"), on = btn.getAttribute("aria-pressed") !== "true";
+  try { await post("favourite", { kind, id: +id, on }); } catch (e) { return alert(e.message); }
+  for (const b of document.querySelectorAll(`[data-fav="${kind}:${id}"]`)) {
+    b.setAttribute("aria-pressed", String(on));
+    b.classList.toggle("on", on);
+    if (b.classList.contains("star")) b.textContent = on ? "★" : "☆";
+    else b.textContent = on ? "★ Favourite" : "☆ Favourite";
+    b.title = on ? "Remove from favourites" : "Add to favourites";
+  }
+  if (!location.hash) showHome();
+}
+async function hideContinue(id) {
+  try { await post("hide-continue", { id }); } catch (e) { return alert(e.message); }
+  showHome();
+}
 
 async function loadFacets() {
   try {
@@ -408,6 +459,7 @@ async function openBook(id) {
   $("bookRead").textContent = b.progress && !b.progress.finished ? `Continue (${isText(b) ? "chapter" : "page"} ${b.progress.page + 1})` : "Read";
   $("bookRead").disabled = $("bookRestart").disabled = b.missing || !b.pages;
   $("bookMark").textContent = b.progress?.finished ? "Mark as unread" : "Mark as read";
+  $("bookFav").textContent = b.favourite ? "★ Favourite" : "☆ Add to favourites";
   say($("bookMsg"), b.missing ? "This book's file is missing. Its details and progress are kept until you forget missing books." : "", b.missing);
   $("bookDlg").showModal();
 }
@@ -427,6 +479,13 @@ $("bookSave").onclick = async () => {
 };
 $("bookRead").onclick = () => { $("bookDlg").close(); openReader(bookOpen.id); };
 $("bookRestart").onclick = () => { $("bookDlg").close(); openReader(bookOpen.id, 0); };
+$("bookFav").onclick = async () => {
+  const on = !bookOpen.favourite;
+  try { await post("favourite", { kind: "book", id: bookOpen.id, on }); } catch (e) { return alert(e.message); }
+  bookOpen.favourite = on;
+  $("bookFav").textContent = on ? "★ Favourite" : "☆ Add to favourites";
+  route();
+};
 $("bookMark").onclick = async () => {
   const b = bookOpen;
   if (b.progress?.finished) await post("clear-progress", { id: b.id });

@@ -229,37 +229,40 @@ class LibraryEpubTests(unittest.TestCase):
 
 class MigrationTests(unittest.TestCase):
     def test_0_1_database_is_upgraded_and_keeps_data(self):
+        from cbzshelf import library as L
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             db = tmp / "old.db"
             make_cbz(tmp / "C" / "S" / "a.cbz", n_pages=4)
-            # A 0.1.x database: the base schema without the migrations.
-            lib = Library(db, tmp / "thumbs")
-            lib.add_root(str(tmp / "C"))
-            lib.wait_scan(30)
-            bid = lib.search()["items"][0]["id"]
-            lib.set_progress(bid, 2)
-            lib.edit_book(bid, {"title": "Mine"})
-            lib.close()
+            # A 0.1.x database: the base schema, no migrations run, with a book, an edit and progress.
+            saved, L.MIGRATIONS = L.MIGRATIONS, []
+            try:
+                Library(db, tmp / "thumbs").close()
+            finally:
+                L.MIGRATIONS = saved
             con = sqlite3.connect(db)
+            book = tmp / "C" / "S" / "a.cbz"
             con.executescript(
-                """CREATE TABLE b2 AS SELECT id, root_id, series_id, path, size, mtime, pages, cover, file_json,
-                       user_json, meta_json, sort_key, missing, error, added_at FROM books;
-                   CREATE TABLE p2 AS SELECT book_id, page, finished, updated_at FROM progress;
-                   PRAGMA foreign_keys=OFF; DROP TABLE progress; DROP TABLE books;
-                   ALTER TABLE b2 RENAME TO books; ALTER TABLE p2 RENAME TO progress; PRAGMA user_version=0;"""
+                f"""INSERT INTO roots(id, path, added_at) VALUES (1, '{tmp / "C"}', 1);
+                    INSERT INTO series(id, root_id, key, folder, file_name) VALUES (1, 1, 'dir:x', '{book.parent}', 'S');
+                    INSERT INTO books(id, root_id, series_id, path, size, mtime, pages, user_json, meta_json, added_at)
+                        VALUES (7, 1, 1, '{book}', 1, 1, 4, '{{"title": "Mine"}}', '{{"title": "Mine"}}', 1);
+                    INSERT INTO progress(book_id, page, finished, updated_at) VALUES (7, 2, 0, 1);"""
             )
+            con.commit()
             con.close()
+            bid = 7
+            self.assertEqual(sqlite3.connect(db).execute("PRAGMA user_version").fetchone()[0], 0)
 
             lib = Library(db, tmp / "thumbs")
             self.addCleanup(lib.close)
-            cols = {r[1] for r in lib._q("PRAGMA table_info(books)")}
-            self.assertIn("kind", cols)
+            self.assertIn("kind", {r[1] for r in lib._q("PRAGMA table_info(books)")})
+            self.assertIn("user_id", {r[1] for r in lib._q("PRAGMA table_info(progress)")})
             b = lib.book_detail(bid)
-            self.assertEqual(
-                (b["title"], b["kind"], b["progress"]["page"], b["progress"]["pos"]), ("Mine", "cbz", 2, 0)
-            )
-            self.assertEqual(lib._q("PRAGMA user_version")[0][0], 1)
+            self.assertEqual((b["title"], b["kind"]), ("Mine", "cbz"))
+            self.assertEqual((b["progress"]["page"], b["progress"]["pos"]), (2, 0))  # kept, as user 0's
+            self.assertEqual(lib._q("PRAGMA user_version")[0][0], len(L.MIGRATIONS))
 
 
 if __name__ == "__main__":

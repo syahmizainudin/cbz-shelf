@@ -45,6 +45,9 @@ Instructions for coding agents working in this repository. Read `README.md` for 
 
 - One SQLite connection, `check_same_thread=False`, with every use under `self._lock` (an `RLock`), in WAL mode. Don't open other connections.
 - The base schema is `CREATE ... IF NOT EXISTS`. Changes go in `MIGRATIONS` in `library.py`: each step runs once, in order, and `PRAGMA user_version` counts the steps run. Add new steps at the end, never edit an old one, and never drop user data. `test_0_1_database_is_upgraded_and_keeps_data` covers the upgrade.
+- Reading progress (`progress`, keyed by `user_id, book_id`, with `hidden` for "left out of Continue reading") and `favourites(user_id, kind, item_id)` are per user. Every query on them takes a `user` (default 0, the only user without accounts). `BOOK_FROM` joins both, so its queries pass the user id twice, first. Metadata edits and series settings are shared.
+- `LibraryAPI(library, user_of)`: `user_of()` names the user a request acts for. Standalone it's always 0; a host with accounts (harbor) supplies its signed-in user. Never take the user from the request body or query.
+- Favourites point at book or series ids without a foreign key; `_drop_orphan_favourites` runs whenever books or series are deleted.
 - `books.kind` is `cbz`, `epub-image` or `epub-text`. For text books `pages` counts chapters, `progress.page` is the chapter and `progress.pos` (0–1) how far down it.
 - `book_search` is an FTS5 table keyed by book id. `_reindex` refreshes it after any change to a book's metadata or its series name. `_fts_query` turns user text into quoted prefix terms, so user input is never FTS syntax.
 - Every list endpoint is paginated (`limit` capped at 200). `/api/state` carries only `summary()`, because pages poll it often.

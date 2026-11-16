@@ -69,7 +69,9 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 
 ## The page
 
-- **Home** shows *Continue reading* and your series, with filters for tag and author and sorting by name, recently read or recently added. Search covers titles, series names, authors, tags, summaries and file names, with each word matched as a prefix.
+- **Home** shows *Continue reading*, your *Favourites* and your series, with filters for tag and author and sorting by name, recently read or recently added. Search covers titles, series names, authors, tags, summaries and file names, with each word matched as a prefix.
+- **Favourites:** click the ☆ on any series or book cover (or **☆ Favourite** on a series page or in a book's details). Starred series and books get their own row on Home, and **★ Favourites** next to the filters shows only them.
+- **Continue reading:** the × on a card takes it out of the row, and **Clear all** empties the row. Your page is kept, and a book comes back as soon as you read it again.
 - **A series** shows its books, with progress bars and a Read or Continue button.
 - **Folders** adds library folders with a folder browser, and rescans or removes them.
 
