@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shelf</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f6fed; --accent-text: #fff; --ok: #16794c; --warn: #a15c00; --bad: #c0362c;
+    --chip: #eef1f5; --hover: #f1f4f9; --shadow: 0 10px 30px rgba(16,24,40,.18); --cover: #dde2ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1a1f27; --text: #e6e9ef; --muted: #98a2b3; --line: #2a313c;
+      --accent: #5b8cff; --accent-text: #0b1020; --ok: #4cc38a; --warn: #f0a742; --bad: #ff6b5e;
+      --chip: #232a35; --hover: #222833; --shadow: 0 10px 30px rgba(0,0,0,.5); --cover: #2a313c;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 16px 16px 48px; }
+  header.top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+  header.top h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  header.top h1 svg { width: 26px; height: 26px; }
+  .search { flex: 1; min-width: 200px; display: flex; gap: 8px; }
+  input[type=text], input[type=search], input[type=number], select, textarea {
+    padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+  input[type=search] { flex: 1; min-width: 0; }
+  textarea { width: 100%; min-height: 80px; resize: vertical; }
+  button { border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.link { border: none; background: none; padding: 0 2px; color: var(--accent); }
+  button.danger { color: var(--bad); }
+  button:hover { filter: brightness(.96); }
+  .chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+  .chip b { color: var(--text); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  h2 { font-size: 15px; margin: 18px 0 10px; display: flex; align-items: center; gap: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px 14px; }
+  .row-scroll { display: grid; grid-auto-flow: column; grid-auto-columns: 140px; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
+  .card { cursor: pointer; min-width: 0; }
+  .cover { position: relative; aspect-ratio: 2 / 3; border-radius: 8px; overflow: hidden; background: var(--cover); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cover .badge { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 999px; }
+  .cover .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.35); }
+  .cover .bar i { display: block; height: 100%; background: var(--accent); }
+  .cover.missing::after { content: "missing"; position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55); color: #fff; font-weight: 600; }
+  .card .t { margin-top: 6px; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .s { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  .more { display: flex; justify-content: center; margin-top: 16px; }
+  .series-head { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 8px; }
+  .series-head .cover { width: 140px; flex: none; }
+  .series-head .info { flex: 1; min-width: 240px; }
+  .series-head h2 { font-size: 22px; margin: 0 0 6px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .tags button { border-radius: 999px; padding: 1px 10px; font-size: 12px; background: var(--chip); border-color: transparent; color: var(--text); }
+  .muted { color: var(--muted); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  /* dialogs */
+  dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--panel); color: var(--text); width: min(720px, calc(100vw - 32px)); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  .dlg-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .dlg-head strong { font-size: 16px; }
+  .dlg-body { padding: 14px 16px; max-height: 70vh; overflow: auto; }
+  .dlg-foot { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .form { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; align-items: center; }
+  .form label { color: var(--muted); font-size: 13px; }
+  .form input, .form select { width: 100%; }
+  .form .span { grid-column: 1 / -1; }
+  .book-layout { display: grid; grid-template-columns: 150px 1fr; gap: 16px; }
+  .book-layout .cover { width: 150px; }
+  @media (max-width: 560px) { .book-layout { grid-template-columns: 1fr; } .form { grid-template-columns: 1fr; } }
+  .roots li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+  .roots { list-style: none; margin: 0 0 12px; padding: 0; }
+  .roots code { word-break: break-all; }
+  .dirlist { list-style: none; margin: 8px 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .dirlist button { width: 100%; text-align: left; border: none; border-radius: 0; background: none; }
+  .dirlist li + li { border-top: 1px solid var(--line); }
+  .msg { min-height: 1.2em; color: var(--muted); font-size: 13px; }
+  .msg.err { color: var(--bad); }
+  /* reader */
+  #reader { position: fixed; inset: 0; background: #0b0c0f; color: #e6e9ef; z-index: 10; display: flex; flex-direction: column; }
+  #reader .bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: rgba(20,22,28,.92); flex-wrap: wrap; transition: opacity .2s; }
+  #reader .bar.bottom { gap: 12px; }
+  #reader .bar button, #reader .bar select { background: #222733; color: #e6e9ef; border-color: #333a48; padding: 4px 10px; }
+  #reader .bar .title { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  #reader input[type=range] { flex: 1; }
+  #reader.hide-bars .bar { opacity: 0; pointer-events: none; }
+  #stage { flex: 1; overflow: auto; position: relative; display: flex; justify-content: center; align-items: flex-start; user-select: none; -webkit-user-select: none; }
+  #stage.center { align-items: center; }
+  #stage .spread { display: flex; justify-content: center; align-items: flex-start; margin: auto; }
+  #stage .spread.rtl { flex-direction: row-reverse; }
+  #stage img { display: block; }
+  .fit-height #stage .spread img { height: var(--stage-h); width: auto; max-width: 100%; object-fit: contain; }
+  .fit-height.double #stage .spread img { max-width: 50vw; }
+  .fit-width #stage .spread img { width: 100%; height: auto; }
+  .fit-width #stage .spread { width: min(100%, 1400px); }
+  .fit-width.double #stage .spread img { width: 50%; }
+  .fit-original #stage .spread img { max-width: none; }
+  #stage .vertical { width: min(100%, 900px); margin: 0 auto; }
+  #stage .vertical img { width: 100%; height: auto; min-height: 200px; background: #15171c; }
+  #endPanel { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.75); z-index: 2; }
+  #endPanel div { text-align: center; display: grid; gap: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1 id="home" title="Library home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#2f6fed"/><g fill="#fff"><rect x="13" y="14" width="9" height="36" rx="2"/><rect x="25" y="18" width="9" height="32" rx="2"/><rect x="37" y="15" width="9" height="35" rx="2" transform="rotate(12 41 32)"/></g><rect x="10" y="50" width="44" height="4" rx="2" fill="#9cc4ff"/></svg>
+      Shelf
+    </h1>
+    <form class="search" id="searchForm">
+      <input type="search" id="q" placeholder="Search titles, series, authors, tags…" aria-label="Search">
+    </form>
+    <span class="chip" id="scanChip" hidden></span>
+    <button id="openFolders">Folders</button>
+  </header>
+
+  <div class="filters">
+    <select id="tagFilter" aria-label="Filter by tag"><option value="">All tags</option></select>
+    <select id="authorFilter" aria-label="Filter by author"><option value="">All authors</option></select>
+    <select id="sort" aria-label="Sort series">
+      <option value="name">Sort: name</option><option value="recent">Sort: recently read</option><option value="added">Sort: recently added</option>
+    </select>
+    <button class="link" id="clearFilters" hidden>Clear filters</button>
+    <span class="muted" id="counts"></span>
+  </div>
+
+  <div id="view"></div>
+</main>
+
+<!-- book details -->
+<dialog id="bookDlg">
+  <div class="dlg-head"><strong id="bookDlgTitle">Book</strong><button class="link" data-close>Close</button></div>
+  <div class="dlg-body">
+    <div class="book-layout">
+      <div><div class="cover" id="bookCover"></div><div class="actions"><button class="primary" id="bookRead">Read</button><button id="bookRestart">From the start</button></div><div class="actions"><button class="link" id="bookMark"></button></div></div>
+      <form class="form" id="bookForm">
+        <label for="f-title">Title</label><input type="text" id="f-title" name="title">
+        <label for="f-volume">Volume</label><input type="text" id="f-volume" name="volume" inputmode="decimal">
+        <label for="f-number">Number</label><input type="text" id="f-number" name="number" inputmode="decimal">
+        <label for="f-year">Year</label><input type="text" id="f-year" name="year" inputmode="numeric">
+        <label for="f-authors">Authors</label><input type="text" id="f-authors" name="authors">
+        <label for="f-tags">Tags</label><input type="text" id="f-tags" name="tags">
+        <label for="f-genres">Genres</label><input type="text" id="f-genres" name="genres">
+        <label for="f-publisher">Publisher</label><input type="text" id="f-publisher" name="publisher">
+        <label for="f-language">Language</label><input type="text" id="f-language" name="language">
+        <label for="f-rtl">Direction</label><select id="f-rtl" name="rtl"><option value="">From file / series</option><option value="false">Left to right</option><option value="true">Right to left (manga)</option></select>
+        <label for="f-summary" class="span">Summary</label><textarea id="f-summary" name="summary" class="span"></textarea>
+        <div class="span muted" style="font-size:12px">Grey text is the value from the file. Type to override it; empty a field to go back to the file's value. Your files are never changed.</div>
+      </form>
+    </div>
+    <div class="msg" id="bookMsg"></div>
+  </div>
+  <div class="dlg-foot"><span class="muted" id="bookFile"></span><button class="primary" id="bookSave">Save</button></div>
+</dialog>
+
+<!-- series edit -->
+<dialog id="seriesDlg">
+  <div class="dlg-head"><strong>Edit series</strong><button class="link" data-close>Close</button></div>
+  <div class="dlg-body">
+    <form class="form" id="seriesForm">
+      <label for="s-name">Name</label><input type="text" id="s-name" name="name">
+      <label for="s-authors">Authors</label><input type="text" id="s-authors" name="authors">
+      <label for="s-tags">Tags</label><input type="text" id="s-tags" name="tags">
+      <label for="s-summary" class="span">Summary</label><textarea id="s-summary" name="summary" class="span"></textarea>
+      <div class="span muted" style="font-size:12px">Leave a field empty to use the name of the folder and the metadata of the books.</div>
+    </form>
+    <div class="msg" id="seriesMsg"></div>
+  </div>
+  <div class="dlg-foot"><span class="muted" id="seriesFolder"></span><button class="primary" id="seriesSave">Save</button></div>
+</dialog>
+
+<!-- folders -->
+<dialog id="foldersDlg">
+  <div class="dlg-head"><strong>Library folders</strong><button class="link" data-close>Close</button></div>
+  <div class="dlg-body">
+    <ul class="roots" id="rootList"></ul>
+    <div><strong>Add a folder</strong> <span class="muted">— every .cbz/.zip inside it, including subfolders, is added. Each folder of archives becomes a series.</span></div>
+    <div class="actions"><button id="pickerUp">↑ Up</button><input type="text" id="pickerPath" style="flex:1;min-width:0"><button id="pickerGo">Go</button></div>
+    <div class="actions" id="pickerShortcuts"></div>
+    <ul class="dirlist" id="pickerList"></ul>
+    <div class="msg" id="foldersMsg"></div>
+  </div>
+  <div class="dlg-foot">
+    <span><button id="scanAll">Rescan all</button> <button class="link" id="cancelScan" hidden>Stop scan</button></span>
+    <span><button class="danger" id="removeMissing">Forget missing books</button> <button class="primary" id="addRoot">Add this folder</button></span>
+  </div>
+</dialog>
+
+<!-- reader -->
+<div id="reader" hidden>
+  <div class="bar top">
+    <button id="rClose" title="Back to the library (Esc)">← Library</button>
+    <span class="title" id="rTitle"></span>
+    <select id="rMode" title="Layout"><option value="single">Single page</option><option value="double">Two pages</option><option value="vertical">Vertical scroll</option></select>
+    <button id="rDir" title="Reading direction"></button>
+    <select id="rFit" title="Fit"><option value="height">Fit height</option><option value="width">Fit width</option><option value="original">Original size</option></select>
+    <button id="rFull" title="Full screen (F)">Full screen</button>
+  </div>
+  <div id="stage" tabindex="-1"></div>
+  <div class="bar bottom">
+    <button id="rPrev">‹</button>
+    <input type="range" id="rSlider" min="1" value="1" aria-label="Page">
+    <button id="rNext">›</button>
+    <span id="rPage" style="min-width:70px;text-align:right"></span>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const API = "/api/library/";
+const store = {
+  get(k, d = null) { try { const v = localStorage.getItem("shelf." + k); return v === null ? d : v; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("shelf." + k, v); } catch {} },
+};
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function qs(o) { return Object.entries(o).filter(([, v]) => v !== "" && v != null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&"); }
+async function get(action, params = {}) {
+  const r = await fetch(API + action + "?" + qs(params));
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+}
+async function post(action, body, opts = {}) {
+  const r = await fetch(API + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), ...opts });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+}
+const thumb = b => `${API}thumb?book=${b.id}&v=${b.v}`;
+const pageUrl = (b, n) => `${API}page?book=${b.id}&n=${n}&v=${b.v}`;
+function say(el, text, err) { el.textContent = text; el.className = "msg" + (err ? " err" : ""); }
+const list = v => (Array.isArray(v) ? v.join(", ") : (v ?? ""));
+const numLabel = b => [b.volume != null ? `Vol. ${b.volume}` : "", b.number != null ? `#${b.number}` : ""].filter(Boolean).join(" ");
+for (const d of document.querySelectorAll("dialog")) d.addEventListener("click", e => { if (e.target.matches("[data-close]")) d.close(); });
+
+/* ------------------------------------------------------------------ cards */
+function bookCard(b, sub) {
+  const p = b.progress;
+  const pct = p && b.pages ? Math.round(100 * (p.finished ? 1 : (p.page + 1) / b.pages)) : 0;
+  return `<div class="card" data-book="${b.id}">
+    <div class="cover${b.missing ? " missing" : ""}">${b.missing ? "" : `<img loading="lazy" src="${thumb(b)}" alt="">`}
+      ${p?.finished ? `<span class="badge">read</span>` : ""}${pct && !p.finished ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>
+    <div class="t" title="${esc(b.title)}">${esc(b.title)}</div>
+    <div class="s">${esc(sub ?? (numLabel(b) || `${b.pages} pages`))} · <button class="link" data-info="${b.id}">details</button></div></div>`;
+}
+function seriesCard(s) {
+  return `<div class="card" data-series="${s.id}">
+    <div class="cover">${s.cover_book ? `<img loading="lazy" src="${API}thumb?book=${s.cover_book}&v=${s.cover_v}" alt="">` : ""}
+      <span class="badge">${s.books}</span></div>
+    <div class="t" title="${esc(s.name)}">${esc(s.name)}</div>
+    <div class="s">${s.finished ? `${s.finished}/${s.books} read` : `${s.books} book${s.books === 1 ? "" : "s"}`}${s.missing ? ` · ${s.missing} missing` : ""}</div></div>`;
+}
+$("view").addEventListener("click", e => {
+  const info = e.target.closest("[data-info]");
+  if (info) { e.stopPropagation(); return openBook(+info.dataset.info); }
+  const tag = e.target.closest("[data-tag]");
+  if (tag) { $("tagFilter").value = tag.dataset.tag; return applyFilters(); }
+  const author = e.target.closest("[data-author]");
+  if (author) { $("authorFilter").value = author.dataset.author; return applyFilters(); }
+  const s = e.target.closest("[data-series]");
+  if (s) return (location.hash = "#series/" + s.dataset.series);
+  const b = e.target.closest("[data-book]");
+  if (b) return openReader(+b.dataset.book);
+  const act = e.target.closest("[data-act]");
+  if (act) actions[act.dataset.act]?.(act);
+});
+
+/* ------------------------------------------------------------------ views */
+let seriesOffset = 0, current = { series: null };
+const filters = () => ({ q: $("q").value.trim(), tag: $("tagFilter").value, author: $("authorFilter").value });
+function filtering() { const f = filters(); return !!(f.q || f.tag || f.author); }
+
+async function showHome(append = false) {
+  const f = filters();
+  $("clearFilters").hidden = !filtering();
+  if (!append) seriesOffset = 0;
+  try {
+    const [series, cont] = await Promise.all([
+      get("series", { ...f, sort: $("sort").value, limit: 60, offset: seriesOffset }),
+      append || filtering() ? null : get("continue"),
+    ]);
+    let html = "";
+    if (cont && cont.length) {
+      html += `<h2>Continue reading</h2><div class="row-scroll">${cont.map(b => bookCard(b, `page ${b.progress.page + 1} of ${b.pages}`)).join("")}</div>`;
+    }
+    if (filtering() && f.q && !append) {
+      const books = await get("search", { ...f, limit: 60 });
+      html += `<h2>Books <span class="chip">${books.total}</span></h2>` +
+        (books.items.length ? `<div class="grid">${books.items.map(b => bookCard(b)).join("")}</div>` : `<div class="empty">No books match.</div>`);
+    }
+    const cards = series.items.map(seriesCard).join("");
+    if (append) {
+      document.querySelector("#seriesGrid").insertAdjacentHTML("beforeend", cards);
+    } else {
+      html += `<h2>Series <span class="chip">${series.total}</span></h2>` +
+        (series.items.length ? `<div class="grid" id="seriesGrid">${cards}</div>`
+          : `<div class="empty">${filtering() ? "No series match." : "Your library is empty. Click <b>Folders</b> to add a folder of .cbz files."}</div>`) +
+        `<div class="more" id="moreWrap"></div>`;
+      $("view").innerHTML = html;
+    }
+    seriesOffset += series.items.length;
+    $("moreWrap").innerHTML = seriesOffset < series.total ? `<button data-act="more">Show more (${series.total - seriesOffset} left)</button>` : "";
+  } catch (e) { $("view").innerHTML = `<div class="empty">Couldn't load the library: ${esc(e.message)}</div>`; }
+}
+
+async function showSeries(id) {
+  try {
+    const s = await get("series-detail", { id });
+    current.series = s;
+    const first = s.books.find(b => !b.missing);
+    const next = s.books.find(b => !b.missing && !b.progress?.finished);
+    $("view").innerHTML = `
+      <div class="series-head">
+        <div class="cover">${first ? `<img src="${thumb(first)}" alt="">` : ""}</div>
+        <div class="info">
+          <h2>${esc(s.name)}</h2>
+          <div class="muted">${s.books.length} book${s.books.length === 1 ? "" : "s"} · ${esc(s.folder)}</div>
+          ${s.authors.length ? `<div class="tags">${s.authors.map(a => `<button data-author="${esc(a)}">${esc(a)}</button>`).join("")}</div>` : ""}
+          ${s.tags.length ? `<div class="tags">${s.tags.map(t => `<button data-tag="${esc(t)}">#${esc(t)}</button>`).join("")}</div>` : ""}
+          ${s.summary ? `<p>${esc(s.summary)}</p>` : ""}
+          <div class="actions">
+            ${next ? `<button class="primary" data-book="${next.id}">${next.progress ? "Continue" : "Read"} ${esc(numLabel(next) || next.title)}</button>` : ""}
+            <button data-act="editSeries">Edit series</button>
+            <span class="muted">Reader: ${s.reader.rtl ? "right to left" : "left to right"}, ${s.reader.mode}</span>
+          </div>
+        </div>
+      </div>
+      <div class="grid">${s.books.map(b => bookCard(b)).join("")}</div>`;
+  } catch (e) { $("view").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+const actions = {
+  more: () => showHome(true),
+  editSeries: () => openSeriesEdit(),
+};
+function route() {
+  const m = location.hash.match(/^#series\/(\d+)/);
+  if (m) showSeries(+m[1]); else showHome();
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", route);
+$("home").onclick = () => { location.hash = ""; route(); };
+let searchTimer;
+$("q").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(applyFilters, 300); };
+$("searchForm").onsubmit = e => { e.preventDefault(); applyFilters(); };
+function applyFilters() { if (location.hash) location.hash = ""; showHome(); }
+for (const id of ["tagFilter", "authorFilter", "sort"]) $(id).onchange = applyFilters;
+$("sort").value = store.get("sort", "name");
+$("sort").addEventListener("change", () => store.set("sort", $("sort").value));
+$("clearFilters").onclick = () => { $("q").value = ""; $("tagFilter").value = ""; $("authorFilter").value = ""; applyFilters(); };
+
+async function loadFacets() {
+  try {
+    const f = await get("facets");
+    for (const [sel, items, label] of [["tagFilter", f.tags, "All tags"], ["authorFilter", f.authors, "All authors"]]) {
+      const keep = $(sel).value;
+      $(sel).innerHTML = `<option value="">${label}</option>` + items.map(i => `<option value="${esc(i.value)}">${esc(i.value)} (${i.n})</option>`).join("");
+      $(sel).value = keep;
+    }
+  } catch {}
+}
+
+/* ------------------------------------------------------------------ book details */
+let bookOpen = null;
+const BOOK_FIELDS = ["title", "volume", "number", "year", "authors", "tags", "genres", "publisher", "language", "summary"];
+async function openBook(id) {
+  try { bookOpen = await get("book", { id }); } catch (e) { return alert(e.message); }
+  const b = bookOpen;
+  $("bookDlgTitle").textContent = b.title;
+  $("bookCover").innerHTML = b.missing ? "" : `<img src="${thumb(b)}" alt="">`;
+  $("bookCover").className = "cover" + (b.missing ? " missing" : "");
+  for (const f of BOOK_FIELDS) {
+    const el = $("f-" + f);
+    el.value = list(b.user_meta[f]);
+    el.placeholder = list(b.file_meta[f]);
+  }
+  $("f-rtl").value = b.user_meta.rtl === undefined ? "" : String(b.user_meta.rtl);
+  $("bookFile").textContent = `${b.file} · ${b.pages} pages` + (b.error ? ` · ${b.error}` : "");
+  $("bookRead").textContent = b.progress && !b.progress.finished ? `Continue (page ${b.progress.page + 1})` : "Read";
+  $("bookRead").disabled = $("bookRestart").disabled = b.missing || !b.pages;
+  $("bookMark").textContent = b.progress?.finished ? "Mark as unread" : "Mark as read";
+  say($("bookMsg"), b.missing ? "This book's file is missing. Its details and progress are kept until you forget missing books." : "", b.missing);
+  $("bookDlg").showModal();
+}
+$("bookSave").onclick = async () => {
+  const changes = {};
+  for (const f of BOOK_FIELDS) {
+    const v = $("f-" + f).value.trim(), old = list(bookOpen.user_meta[f]);
+    if (v !== String(old)) changes[f] = v === "" ? null : v;
+  }
+  const rtl = $("f-rtl").value, oldRtl = bookOpen.user_meta.rtl === undefined ? "" : String(bookOpen.user_meta.rtl);
+  if (rtl !== oldRtl) changes.rtl = rtl === "" ? null : rtl === "true";
+  if (!Object.keys(changes).length) return $("bookDlg").close();
+  try {
+    await post("edit-book", { id: bookOpen.id, changes });
+    $("bookDlg").close(); loadFacets(); route();
+  } catch (e) { say($("bookMsg"), e.message, true); }
+};
+$("bookRead").onclick = () => { $("bookDlg").close(); openReader(bookOpen.id); };
+$("bookRestart").onclick = () => { $("bookDlg").close(); openReader(bookOpen.id, 0); };
+$("bookMark").onclick = async () => {
+  const b = bookOpen;
+  if (b.progress?.finished) await post("clear-progress", { id: b.id });
+  else await post("progress", { id: b.id, page: Math.max(b.pages - 1, 0), finished: true });
+  $("bookDlg").close(); route();
+};
+
+/* ------------------------------------------------------------------ series edit */
+function openSeriesEdit() {
+  const s = current.series;
+  $("s-name").value = s.user.name || ""; $("s-name").placeholder = s.file_name;
+  $("s-authors").value = list(s.user.authors); $("s-authors").placeholder = list(s.authors);
+  $("s-tags").value = list(s.user.tags); $("s-tags").placeholder = list(s.tags);
+  $("s-summary").value = s.user.summary || "";
+  $("seriesFolder").textContent = s.folder;
+  say($("seriesMsg"), "");
+  $("seriesDlg").showModal();
+}
+$("seriesSave").onclick = async () => {
+  const s = current.series, changes = {};
+  for (const f of ["name", "authors", "tags", "summary"]) {
+    const v = $("s-" + f).value.trim();
+    if (v !== list(s.user[f])) changes[f] = v === "" ? null : v;
+  }
+  try {
+    if (Object.keys(changes).length) await post("edit-series", { id: s.id, changes });
+    $("seriesDlg").close(); loadFacets(); route();
+  } catch (e) { say($("seriesMsg"), e.message, true); }
+};
+
+/* ------------------------------------------------------------------ folders */
+let pickerCurrent = null;
+async function openFolders() {
+  await renderRoots();
+  $("foldersDlg").showModal();
+  pickerLoad(pickerCurrent?.path || store.get("lastDir", ""));
+}
+async function renderRoots() {
+  const roots = await get("roots");
+  $("rootList").innerHTML = roots.length ? roots.map(r => `<li><span><code>${esc(r.path)}</code><br><span class="muted">${r.books} books${r.missing ? `, ${r.missing} missing` : ""}</span></span>
+    <span><button data-rescan="${r.id}">Rescan</button> <button class="danger" data-remove="${r.id}">Remove</button></span></li>`).join("")
+    : `<li class="muted">No folders yet.</li>`;
+}
+$("rootList").onclick = async e => {
+  const rs = e.target.closest("[data-rescan]"), rm = e.target.closest("[data-remove]");
+  try {
+    if (rs) { await post("scan", { root_id: +rs.dataset.rescan }); say($("foldersMsg"), "Scanning…"); }
+    if (rm && confirm("Remove this folder from the library? Its books, your edits and reading progress are forgotten. Files on disk are not touched.")) {
+      await post("remove-root", { id: +rm.dataset.remove }); await renderRoots(); loadFacets(); route();
+    }
+  } catch (err) { say($("foldersMsg"), err.message, true); }
+};
+async function pickerLoad(path) {
+  try {
+    const r = await fetch("/api/dirs?path=" + encodeURIComponent(path || "")).then(async x => { const d = await x.json(); if (!x.ok) throw new Error(d.error); return d; });
+    pickerCurrent = r;
+    $("pickerPath").value = r.path;
+    $("pickerUp").disabled = !r.parent;
+    $("pickerShortcuts").innerHTML = r.shortcuts.map(s => `<button data-path="${esc(s.path)}">${esc(s.label)}</button>`).join("");
+    $("pickerList").innerHTML = (r.dirs.length ? r.dirs.map(d => `<li><button data-dir="${esc(d)}">📁 ${esc(d)}</button></li>`).join("") : `<li class="muted" style="padding:8px">No subfolders.</li>`);
+    say($("foldersMsg"), r.files ? `${r.files} .cbz/.zip file(s) directly in this folder` : "");
+  } catch (e) { say($("foldersMsg"), e.message, true); }
+}
+$("pickerShortcuts").onclick = e => { const b = e.target.closest("[data-path]"); if (b) pickerLoad(b.dataset.path); };
+$("pickerList").onclick = e => { const b = e.target.closest("[data-dir]"); if (b && pickerCurrent) pickerLoad(pickerCurrent.path.replace(/\/$/, "") + "/" + b.dataset.dir); };
+$("pickerUp").onclick = () => pickerCurrent?.parent && pickerLoad(pickerCurrent.parent);
+$("pickerGo").onclick = () => pickerLoad($("pickerPath").value);
+$("pickerPath").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); pickerLoad($("pickerPath").value); } };
+$("addRoot").onclick = async () => {
+  try {
+    const r = await post("add-root", { path: pickerCurrent?.path || $("pickerPath").value });
+    store.set("lastDir", r.path);
+    say($("foldersMsg"), `Added ${r.path}. Scanning…`);
+    await renderRoots();
+  } catch (e) { say($("foldersMsg"), e.message, true); }
+};
+$("scanAll").onclick = async () => { await post("scan", {}); say($("foldersMsg"), "Scanning all folders…"); };
+$("cancelScan").onclick = () => post("cancel-scan", {});
+$("removeMissing").onclick = async () => {
+  if (!confirm("Forget every book whose file is missing, with your edits and progress for it?")) return;
+  const r = await post("remove-missing", {});
+  say($("foldersMsg"), `Forgot ${r.removed} missing book(s).`); renderRoots(); route();
+};
+$("openFolders").onclick = openFolders;
+
+/* ------------------------------------------------------------------ status polling */
+let lastScanDone = null;
+async function poll() {
+  try {
+    const st = await fetch("/api/state").then(r => r.json());
+    const L = st.library, scan = L.scan;
+    $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
+    $("scanChip").hidden = !scan.running;
+    $("cancelScan").hidden = !scan.running;
+    if (scan.running) $("scanChip").innerHTML = `scanning <b>${scan.done}/${scan.total}</b>`;
+    const doneAt = scan.last?.finished_at ?? null;
+    if (lastScanDone !== null && doneAt !== lastScanDone && $("reader").hidden) {
+      loadFacets(); route();
+      if ($("foldersDlg").open) { renderRoots(); const l = scan.last; say($("foldersMsg"), `Scan finished: ${l.added} added, ${l.updated} updated, ${l.missing} missing${l.errors ? `, ${l.errors} unreadable` : ""}.`); }
+    }
+    lastScanDone = doneAt;
+  } catch {}
+}
+setInterval(poll, 1500);
+
+/* ------------------------------------------------------------------ reader */
+const R = { book: null, series: null, page: 0, mode: "single", rtl: false, fit: "height", saveTimer: null, observer: null };
+async function openReader(bookId, startPage) {
+  try {
+    const book = await get("book", { id: bookId });
+    if (book.missing || !book.pages) return openBook(bookId);
+    const series = await get("series-detail", { id: book.series_id });
+    Object.assign(R, { book, series, mode: series.reader.mode, fit: series.reader.fit });
+    R.rtl = book.user_meta.rtl ?? series.user.rtl ?? book.meta.rtl ?? series.reader.rtl;
+    R.page = startPage ?? (book.progress && !book.progress.finished ? book.progress.page : 0);
+  } catch (e) { return alert(e.message); }
+  $("reader").hidden = false;
+  document.body.style.overflow = "hidden";
+  $("rTitle").textContent = `${R.series.name} — ${R.book.title}`;
+  $("rSlider").max = R.book.pages;
+  syncControls();
+  render();
+  $("stage").focus();
+}
+function syncControls() {
+  $("rMode").value = R.mode; $("rFit").value = R.fit;
+  $("rDir").textContent = R.rtl ? "Right to left" : "Left to right";
+  $("reader").className = `fit-${R.fit} ${R.mode}`;
+}
+function stageHeight() { return $("stage").clientHeight + "px"; }
+function spreads() {
+  const n = R.book.pages, out = [[0]];
+  for (let i = 1; i < n; i += 2) out.push(i + 1 < n ? [i, i + 1] : [i]);
+  return out;
+}
+function render() {
+  const stage = $("stage");
+  if (R.observer) { R.observer.disconnect(); R.observer = null; }
+  stage.style.setProperty("--stage-h", stageHeight());
+  if (R.mode === "vertical") {
+    stage.classList.remove("center");
+    stage.innerHTML = `<div class="vertical">${Array.from({ length: R.book.pages }, (_, i) => `<img loading="lazy" data-n="${i}" src="${pageUrl(R.book, i)}" alt="Page ${i + 1}">`).join("")}</div>`;
+    const target = stage.querySelector(`img[data-n="${R.page}"]`);
+    requestAnimationFrame(() => target?.scrollIntoView());
+    R.observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(e => e.isIntersecting).map(e => +e.target.dataset.n);
+      if (visible.length) { R.page = Math.min(...visible); afterTurn(); }
+    }, { root: stage, threshold: 0.4 });
+    stage.querySelectorAll("img").forEach(img => R.observer.observe(img));
+  } else {
+    stage.classList.toggle("center", R.fit === "height");
+    const pages = R.mode === "double" ? spreads().find(s => s.includes(R.page)) : [R.page];
+    stage.innerHTML = `<div class="spread${R.rtl ? " rtl" : ""}">${pages.map(n => `<img src="${pageUrl(R.book, n)}" alt="Page ${n + 1}">`).join("")}</div>`;
+    stage.scrollTo(0, 0);
+    const last = pages[pages.length - 1];
+    for (const n of [last + 1, last + 2, last + 3]) if (n < R.book.pages) new Image().src = pageUrl(R.book, n);
+    afterTurn();
+  }
+}
+function afterTurn() {
+  $("rSlider").value = R.page + 1;
+  const shown = R.mode === "double" ? spreads().find(s => s.includes(R.page)) : [R.page];
+  $("rPage").textContent = `${shown.map(n => n + 1).join("–")} / ${R.book.pages}`;
+  clearTimeout(R.saveTimer);
+  R.saveTimer = setTimeout(saveProgress, 800);
+}
+function saveProgress(keepalive = false) {
+  clearTimeout(R.saveTimer);
+  if (!R.book) return;
+  const lastShown = R.mode === "double" ? Math.max(...spreads().find(s => s.includes(R.page))) : R.page;
+  post("progress", { id: R.book.id, page: lastShown }, keepalive ? { keepalive: true } : {}).catch(() => {});
+}
+function go(delta) {
+  if (R.mode === "vertical") {
+    const stage = $("stage");
+    stage.scrollBy({ top: delta * stage.clientHeight * 0.9, behavior: "smooth" });
+    return;
+  }
+  if (R.mode === "double") {
+    const sp = spreads(), i = sp.findIndex(s => s.includes(R.page)), j = i + delta;
+    if (j >= sp.length) return showEnd();
+    if (j < 0) return;
+    R.page = sp[j][0];
+  } else {
+    const n = R.page + delta;
+    if (n >= R.book.pages) return showEnd();
+    if (n < 0) return;
+    R.page = n;
+  }
+  render();
+}
+function goTo(n) { R.page = Math.max(0, Math.min(R.book.pages - 1, n)); render(); }
+const forward = () => go(1), back = () => go(-1);
+// Screen-side actions: in right-to-left books the left side moves forward.
+const leftSide = () => (R.rtl ? forward() : back());
+const rightSide = () => (R.rtl ? back() : forward());
+
+function showEnd() {
+  saveProgress();
+  const books = R.series.books.filter(b => !b.missing && b.pages);
+  const i = books.findIndex(b => b.id === R.book.id), next = books[i + 1];
+  post("progress", { id: R.book.id, page: R.book.pages - 1, finished: true }).catch(() => {});
+  const panel = document.createElement("div");
+  panel.id = "endPanel";
+  panel.innerHTML = `<div><strong>Finished ${esc(R.book.title)}</strong>
+    ${next ? `<button class="primary" id="endNext">Next: ${esc(numLabel(next) || next.title)}</button>` : `<span>That was the last book in this series.</span>`}
+    <button id="endStay">Stay on the last page</button><button id="endClose">Back to the library</button></div>`;
+  $("stage").appendChild(panel);
+  panel.querySelector("#endStay").onclick = () => panel.remove();
+  panel.querySelector("#endClose").onclick = closeReader;
+  if (next) panel.querySelector("#endNext").onclick = () => openReader(next.id, 0);
+}
+function closeReader() {
+  saveProgress(true);
+  if (R.observer) R.observer.disconnect();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("reader").hidden = true;
+  $("stage").innerHTML = "";
+  document.body.style.overflow = "";
+  R.book = null;
+  route();
+}
+async function saveSeriesSetting(changes) {
+  try { await post("edit-series", { id: R.series.id, changes }); } catch {}
+}
+$("rClose").onclick = closeReader;
+$("rPrev").onclick = leftSide;
+$("rNext").onclick = rightSide;
+$("rSlider").oninput = () => { $("rPage").textContent = `${$("rSlider").value} / ${R.book.pages}`; };
+$("rSlider").onchange = () => goTo(+$("rSlider").value - 1);
+$("rMode").onchange = () => { R.mode = $("rMode").value; syncControls(); render(); saveSeriesSetting({ mode: R.mode }); };
+$("rFit").onchange = () => { R.fit = $("rFit").value; syncControls(); render(); saveSeriesSetting({ fit: R.fit }); };
+$("rDir").onclick = () => { R.rtl = !R.rtl; syncControls(); render(); saveSeriesSetting({ rtl: R.rtl }); };
+$("rFull").onclick = toggleFull;
+function toggleFull() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else $("reader").requestFullscreen?.().catch(() => {});
+}
+$("stage").addEventListener("click", e => {
+  if (e.target.closest("#endPanel") || R.mode === "vertical") return;
+  const x = e.clientX / $("stage").clientWidth;
+  if (x < 0.33) leftSide(); else if (x > 0.67) rightSide(); else $("reader").classList.toggle("hide-bars");
+});
+let touchX = null, touchY = null;
+$("stage").addEventListener("touchstart", e => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+$("stage").addEventListener("touchend", e => {
+  if (touchX === null || R.mode === "vertical") return;
+  const dx = e.changedTouches[0].clientX - touchX, dy = e.changedTouches[0].clientY - touchY;
+  touchX = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) rightSide(); else leftSide(); }
+});
+document.addEventListener("keydown", e => {
+  if ($("reader").hidden || e.target.matches("input, select, textarea")) return;
+  const k = e.key;
+  if (k === "ArrowRight") { e.preventDefault(); R.mode === "vertical" ? go(1) : rightSide(); }
+  else if (k === "ArrowLeft") { e.preventDefault(); R.mode === "vertical" ? go(-1) : leftSide(); }
+  else if (k === " " || k === "PageDown") { e.preventDefault(); e.shiftKey ? back() : forward(); }
+  else if (k === "PageUp") { e.preventDefault(); back(); }
+  else if (k === "Home") { e.preventDefault(); goTo(0); }
+  else if (k === "End") { e.preventDefault(); goTo(R.book.pages - 1); }
+  else if (k === "f" || k === "F") toggleFull();
+  else if (k === "Escape" && !document.fullscreenElement) closeReader();
+});
+window.addEventListener("resize", () => { if (!$("reader").hidden && R.mode !== "vertical") $("stage").style.setProperty("--stage-h", stageHeight()); });
+window.addEventListener("pagehide", () => { if (R.book) saveProgress(true); });
+
+/* ------------------------------------------------------------------ start */
+loadFacets();
+route();
+poll();
+</script>
+</body>
+</html>

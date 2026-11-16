@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # the release workflow runs this first
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RUFF_VERSION: "0.17.5"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff==${RUFF_VERSION}"
+      - name: Lint
+        run: ruff check --output-format=github .
+      - name: Format
+        run: ruff format --check .
+
+  test:
+    name: test (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - name: Install the pinned cbz-webp (public repo) and Pillow
+        run: pip install .
+      - name: Check Pillow has WebP
+        run: python -c "from PIL import features; assert features.check('webp'), 'Pillow built without WebP'"
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+  package:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Install the wheel in a clean venv, build a library and serve it
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/cbz-shelf --version
+          mkdir -p "/tmp/comics/Series A"
+          /tmp/smoke/bin/python - <<'EOF'
+          import io, zipfile
+          from PIL import Image
+          buf = io.BytesIO()
+          Image.new("RGB", (60, 90), "red").save(buf, "WEBP")
+          with zipfile.ZipFile("/tmp/comics/Series A/Series A v01.cbz", "w") as z:
+              z.writestr("001.webp", buf.getvalue())
+          EOF
+          export CBZ_SHELF_DB=/tmp/lib.db
+          /tmp/smoke/bin/cbz-shelf add /tmp/comics | tee /tmp/add.txt
+          grep -q "1 added" /tmp/add.txt
+          /tmp/smoke/bin/cbz-shelf ui -p 8903 --no-scan &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/api/state > /tmp/state.json && break; sleep 0.25; done
+          python -c "import json; s = json.load(open('/tmp/state.json')); assert s['library']['books'] == 1, s"
+          curl -sf http://127.0.0.1:8903/ | grep -q "<title>Shelf</title>"
+          curl -sf "http://127.0.0.1:8903/api/library/page?book=1&n=0" | head -c 4 | grep -q RIFF
+          kill %1
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
