@@ -4,6 +4,11 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.1.1
+
+- The Folders window keeps one size: the folder browser fills it and scrolls inside, and the list of library folders scrolls in its own area, instead of the window growing and shrinking with every folder.
+- Scrollbars and form controls follow the dark theme.
+
 ## 0.1.0
 
 First release.
