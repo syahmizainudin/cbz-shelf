@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cbz-shelf"
 dynamic = ["version"]
-description = "A library and reader for .cbz comics: scan folders, edit metadata, search, read in the browser"
+description = "A library and reader for .cbz comics and EPUB books: scan folders, edit metadata, search, read in the browser"
 readme = "README.md"
 requires-python = ">=3.10"
 # cbz-webp provides the console server, natural sorting, path handling and Pillow.
@@ -35,3 +35,4 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "cbzshelf/library.py" = ["E501"]  # SQL reads better unwrapped
+"tests/{helpers,test_epub}.py" = ["E501"]  # EPUB fixtures: XML and HTML in one string

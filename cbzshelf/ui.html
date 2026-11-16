@@ -114,6 +114,11 @@
   #stage .vertical img { width: 100%; height: auto; min-height: 200px; background: #15171c; }
   #endPanel { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.75); z-index: 2; }
   #endPanel div { text-align: center; display: grid; gap: 12px; }
+  /* text books: the chapter in a frame that runs no scripts */
+  #reader.text .comic-only, #reader:not(.text) .text-only { display: none; }
+  #reader.text #stage { display: block; overflow: hidden; }
+  #tframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+  #tToc { max-width: 260px; }
 </style>
 </head>
 <body>
@@ -190,7 +195,7 @@
   <div class="dlg-head"><strong>Library folders</strong><button class="link" data-close>Close</button></div>
   <div class="dlg-body">
     <ul class="roots" id="rootList"></ul>
-    <div><strong>Add a folder</strong> <span class="muted">— every .cbz/.zip inside it, including subfolders, is added. Each folder of archives becomes a series.</span></div>
+    <div><strong>Add a folder</strong> <span class="muted">— every .cbz/.zip/.epub inside it, including subfolders, is added. Each folder of archives becomes a series.</span></div>
     <div class="actions"><button id="pickerUp">↑ Up</button><input type="text" id="pickerPath" style="flex:1;min-width:0"><button id="pickerGo">Go</button></div>
     <div class="actions" id="pickerShortcuts"></div>
     <ul class="dirlist" id="pickerList"></ul>
@@ -207,9 +212,14 @@
   <div class="bar top">
     <button id="rClose" title="Back to the library (Esc)">← Library</button>
     <span class="title" id="rTitle"></span>
-    <select id="rMode" title="Layout"><option value="single">Single page</option><option value="double">Two pages</option><option value="vertical">Vertical scroll</option></select>
-    <button id="rDir" title="Reading direction"></button>
-    <select id="rFit" title="Fit"><option value="height">Fit height</option><option value="width">Fit width</option><option value="original">Original size</option></select>
+    <select id="tToc" class="text-only" title="Contents" aria-label="Contents"></select>
+    <button id="tSmaller" class="text-only" title="Smaller text">A−</button>
+    <button id="tBigger" class="text-only" title="Larger text">A+</button>
+    <select id="tWidth" class="text-only" title="Line width"><option value="32">Narrow</option><option value="40">Medium</option><option value="56">Wide</option></select>
+    <select id="tTheme" class="text-only" title="Colours"><option value="original">Book's colours</option><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></select>
+    <select id="rMode" class="comic-only" title="Layout"><option value="single">Single page</option><option value="double">Two pages</option><option value="vertical">Vertical scroll</option></select>
+    <button id="rDir" class="comic-only" title="Reading direction"></button>
+    <select id="rFit" class="comic-only" title="Fit"><option value="height">Fit height</option><option value="width">Fit width</option><option value="original">Original size</option></select>
     <button id="rFull" title="Full screen (F)">Full screen</button>
   </div>
   <div id="stage" tabindex="-1"></div>
@@ -246,18 +256,21 @@ const thumb = b => `${API}thumb?book=${b.id}&v=${b.v}`;
 const pageUrl = (b, n) => `${API}page?book=${b.id}&n=${n}&v=${b.v}`;
 function say(el, text, err) { el.textContent = text; el.className = "msg" + (err ? " err" : ""); }
 const list = v => (Array.isArray(v) ? v.join(", ") : (v ?? ""));
+const isText = b => b.kind === "epub-text";
+const unit = (b, n) => `${n} ${isText(b) ? "chapter" : "page"}${n === 1 ? "" : "s"}`;
 const numLabel = b => [b.volume != null ? `Vol. ${b.volume}` : "", b.number != null ? `#${b.number}` : ""].filter(Boolean).join(" ");
 for (const d of document.querySelectorAll("dialog")) d.addEventListener("click", e => { if (e.target.matches("[data-close]")) d.close(); });
 
 /* ------------------------------------------------------------------ cards */
 function bookCard(b, sub) {
   const p = b.progress;
-  const pct = p && b.pages ? Math.round(100 * (p.finished ? 1 : (p.page + 1) / b.pages)) : 0;
+  const done = p ? (isText(b) ? p.page + (p.pos || 0) : p.page + 1) : 0;
+  const pct = p && b.pages ? Math.round(100 * (p.finished ? 1 : done / b.pages)) : 0;
   return `<div class="card" data-book="${b.id}">
     <div class="cover${b.missing ? " missing" : ""}">${b.missing ? "" : `<img loading="lazy" src="${thumb(b)}" alt="">`}
       ${p?.finished ? `<span class="badge">read</span>` : ""}${pct && !p.finished ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>
     <div class="t" title="${esc(b.title)}">${esc(b.title)}</div>
-    <div class="s">${esc(sub ?? (numLabel(b) || `${b.pages} pages`))} · <button class="link" data-info="${b.id}">details</button></div></div>`;
+    <div class="s">${esc(sub ?? (numLabel(b) || unit(b, b.pages)))} · <button class="link" data-info="${b.id}">details</button></div></div>`;
 }
 function seriesCard(s) {
   return `<div class="card" data-series="${s.id}">
@@ -297,7 +310,7 @@ async function showHome(append = false) {
     ]);
     let html = "";
     if (cont && cont.length) {
-      html += `<h2>Continue reading</h2><div class="row-scroll">${cont.map(b => bookCard(b, `page ${b.progress.page + 1} of ${b.pages}`)).join("")}</div>`;
+      html += `<h2>Continue reading</h2><div class="row-scroll">${cont.map(b => bookCard(b, `${isText(b) ? "chapter" : "page"} ${b.progress.page + 1} of ${b.pages}`)).join("")}</div>`;
     }
     if (filtering() && f.q && !append) {
       const books = await get("search", { ...f, limit: 60 });
@@ -310,7 +323,7 @@ async function showHome(append = false) {
     } else {
       html += `<h2>Series <span class="chip">${series.total}</span></h2>` +
         (series.items.length ? `<div class="grid" id="seriesGrid">${cards}</div>`
-          : `<div class="empty">${filtering() ? "No series match." : "Your library is empty. Click <b>Folders</b> to add a folder of .cbz files."}</div>`) +
+          : `<div class="empty">${filtering() ? "No series match." : "Your library is empty. Click <b>Folders</b> to add a folder of .cbz or .epub files."}</div>`) +
         `<div class="more" id="moreWrap"></div>`;
       $("view").innerHTML = html;
     }
@@ -391,8 +404,8 @@ async function openBook(id) {
     el.placeholder = list(b.file_meta[f]);
   }
   $("f-rtl").value = b.user_meta.rtl === undefined ? "" : String(b.user_meta.rtl);
-  $("bookFile").textContent = `${b.file} · ${b.pages} pages` + (b.error ? ` · ${b.error}` : "");
-  $("bookRead").textContent = b.progress && !b.progress.finished ? `Continue (page ${b.progress.page + 1})` : "Read";
+  $("bookFile").textContent = `${b.file} · ${unit(b, b.pages)}` + (b.error ? ` · ${b.error}` : "");
+  $("bookRead").textContent = b.progress && !b.progress.finished ? `Continue (${isText(b) ? "chapter" : "page"} ${b.progress.page + 1})` : "Read";
   $("bookRead").disabled = $("bookRestart").disabled = b.missing || !b.pages;
   $("bookMark").textContent = b.progress?.finished ? "Mark as unread" : "Mark as read";
   say($("bookMsg"), b.missing ? "This book's file is missing. Its details and progress are kept until you forget missing books." : "", b.missing);
@@ -474,7 +487,7 @@ async function pickerLoad(path) {
     $("pickerUp").disabled = !r.parent;
     $("pickerShortcuts").innerHTML = r.shortcuts.map(s => `<button data-path="${esc(s.path)}">${esc(s.label)}</button>`).join("");
     $("pickerList").innerHTML = (r.dirs.length ? r.dirs.map(d => `<li><button data-dir="${esc(d)}">📁 ${esc(d)}</button></li>`).join("") : `<li class="muted" style="padding:8px">No subfolders.</li>`);
-    say($("foldersMsg"), r.files ? `${r.files} .cbz/.zip file(s) directly in this folder` : "");
+    say($("foldersMsg"), r.files ? `${r.files} .cbz/.zip/.epub file(s) directly in this folder` : "");
   } catch (e) { say($("foldersMsg"), e.message, true); }
 }
 $("pickerShortcuts").onclick = e => { const b = e.target.closest("[data-path]"); if (b) pickerLoad(b.dataset.path); };
@@ -520,7 +533,8 @@ async function poll() {
 setInterval(poll, 1500);
 
 /* ------------------------------------------------------------------ reader */
-const R = { book: null, series: null, page: 0, mode: "single", rtl: false, fit: "height", saveTimer: null, observer: null };
+const R = { book: null, series: null, page: 0, mode: "single", rtl: false, fit: "height", saveTimer: null, observer: null,
+            text: false, pos: 0, frag: "" };
 async function openReader(bookId, startPage) {
   try {
     const book = await get("book", { id: bookId });
@@ -529,6 +543,9 @@ async function openReader(bookId, startPage) {
     Object.assign(R, { book, series, mode: series.reader.mode, fit: series.reader.fit });
     R.rtl = book.user_meta.rtl ?? series.user.rtl ?? book.meta.rtl ?? series.reader.rtl;
     R.page = startPage ?? (book.progress && !book.progress.finished ? book.progress.page : 0);
+    R.text = isText(book);
+    R.pos = startPage == null && book.progress && !book.progress.finished ? book.progress.pos || 0 : 0;
+    R.frag = "";
   } catch (e) { return alert(e.message); }
   $("reader").hidden = false;
   document.body.style.overflow = "hidden";
@@ -546,7 +563,13 @@ function tellParent(open) {
 function syncControls() {
   $("rMode").value = R.mode; $("rFit").value = R.fit;
   $("rDir").textContent = R.rtl ? "Right to left" : "Left to right";
-  $("reader").className = `fit-${R.fit} ${R.mode}`;
+  $("reader").className = R.text ? "text" : `fit-${R.fit} ${R.mode}`;
+  if (R.text) {
+    $("tToc").innerHTML = (R.book.toc.length ? R.book.toc : R.book.spine.map((_, n) => ({ title: `Chapter ${n + 1}`, n, frag: "", level: 0 })))
+      .map((t, i) => `<option value="${i}">${"\u00a0\u00a0".repeat(t.level)}${esc(t.title)}</option>`).join("");
+    $("tWidth").value = textSettings().width;
+    $("tTheme").value = textSettings().theme;
+  }
 }
 function stageHeight() { return $("stage").clientHeight + "px"; }
 function spreads() {
@@ -555,6 +578,7 @@ function spreads() {
   return out;
 }
 function render() {
+  if (R.text) return renderText();
   const stage = $("stage");
   if (R.observer) { R.observer.disconnect(); R.observer = null; }
   stage.style.setProperty("--stage-h", stageHeight());
@@ -580,6 +604,14 @@ function render() {
 }
 function afterTurn() {
   $("rSlider").value = R.page + 1;
+  if (R.text) {
+    $("rPage").textContent = `${R.page + 1} / ${R.book.pages} · ${Math.round(R.pos * 100)}%`;
+    const toc = tocList(), cur = toc.reduce((best, t, i) => (t.n <= R.page ? i : best), -1);
+    if (cur >= 0) $("tToc").value = String(cur);
+    clearTimeout(R.saveTimer);
+    R.saveTimer = setTimeout(saveProgress, 800);
+    return;
+  }
   const shown = R.mode === "double" ? spreads().find(s => s.includes(R.page)) : [R.page];
   $("rPage").textContent = `${shown.map(n => n + 1).join("–")} / ${R.book.pages}`;
   clearTimeout(R.saveTimer);
@@ -588,10 +620,21 @@ function afterTurn() {
 function saveProgress(keepalive = false) {
   clearTimeout(R.saveTimer);
   if (!R.book) return;
+  if (R.text) {
+    post("progress", { id: R.book.id, page: R.page, pos: R.pos }, keepalive ? { keepalive: true } : {}).catch(() => {});
+    return;
+  }
   const lastShown = R.mode === "double" ? Math.max(...spreads().find(s => s.includes(R.page))) : R.page;
   post("progress", { id: R.book.id, page: lastShown }, keepalive ? { keepalive: true } : {}).catch(() => {});
 }
 function go(delta) {
+  if (R.text) {
+    const n = R.page + delta;
+    if (n >= R.book.pages) return showEnd();
+    if (n < 0) return;
+    Object.assign(R, { page: n, pos: delta < 0 ? 1 : 0, frag: "" });
+    return render();
+  }
   if (R.mode === "vertical") {
     const stage = $("stage");
     stage.scrollBy({ top: delta * stage.clientHeight * 0.9, behavior: "smooth" });
@@ -610,11 +653,11 @@ function go(delta) {
   }
   render();
 }
-function goTo(n) { R.page = Math.max(0, Math.min(R.book.pages - 1, n)); render(); }
+function goTo(n) { R.page = Math.max(0, Math.min(R.book.pages - 1, n)); R.pos = 0; R.frag = ""; render(); }
 const forward = () => go(1), back = () => go(-1);
 // Screen-side actions: in right-to-left books the left side moves forward.
-const leftSide = () => (R.rtl ? forward() : back());
-const rightSide = () => (R.rtl ? back() : forward());
+const leftSide = () => (R.rtl && !R.text ? forward() : back());
+const rightSide = () => (R.rtl && !R.text ? back() : forward());
 
 function showEnd() {
   saveProgress();
@@ -659,21 +702,23 @@ function toggleFull() {
   else $("reader").requestFullscreen?.().catch(() => {});
 }
 $("stage").addEventListener("click", e => {
-  if (e.target.closest("#endPanel") || R.mode === "vertical") return;
+  if (e.target.closest("#endPanel") || R.mode === "vertical" || R.text) return;
   const x = e.clientX / $("stage").clientWidth;
   if (x < 0.33) leftSide(); else if (x > 0.67) rightSide(); else $("reader").classList.toggle("hide-bars");
 });
 let touchX = null, touchY = null;
 $("stage").addEventListener("touchstart", e => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
 $("stage").addEventListener("touchend", e => {
-  if (touchX === null || R.mode === "vertical") return;
+  if (touchX === null || R.mode === "vertical" || R.text) return;
   const dx = e.changedTouches[0].clientX - touchX, dy = e.changedTouches[0].clientY - touchY;
   touchX = null;
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) rightSide(); else leftSide(); }
 });
-document.addEventListener("keydown", e => {
-  if ($("reader").hidden || e.target.matches("input, select, textarea")) return;
+document.addEventListener("keydown", onKey);
+function onKey(e) {
+  if ($("reader").hidden || e.target.matches?.("input, select, textarea")) return;
   const k = e.key;
+  if (R.text && textKey(e)) return;
   if (k === "ArrowRight") { e.preventDefault(); R.mode === "vertical" ? go(1) : rightSide(); }
   else if (k === "ArrowLeft") { e.preventDefault(); R.mode === "vertical" ? go(-1) : leftSide(); }
   else if (k === " " || k === "PageDown") { e.preventDefault(); e.shiftKey ? back() : forward(); }
@@ -682,9 +727,145 @@ document.addEventListener("keydown", e => {
   else if (k === "End") { e.preventDefault(); goTo(R.book.pages - 1); }
   else if (k === "f" || k === "F") toggleFull();
   else if (k === "Escape" && !document.fullscreenElement) closeReader();
-});
-window.addEventListener("resize", () => { if (!$("reader").hidden && R.mode !== "vertical") $("stage").style.setProperty("--stage-h", stageHeight()); });
+}
+window.addEventListener("resize", () => { if (!$("reader").hidden && !R.text && R.mode !== "vertical") $("stage").style.setProperty("--stage-h", stageHeight()); });
 window.addEventListener("pagehide", () => { if (R.book) saveProgress(true); });
+
+/* ------------------------------------------------------------------ text reader (EPUB) */
+// A chapter is untrusted HTML. It is shown in <iframe sandbox="allow-same-origin">, without
+// allow-scripts, and the server sends it with a CSP that blocks scripts and outside requests.
+// Same origin lets this page style it, track the scroll position and handle its links.
+const THEMES = {
+  light: ["#ffffff", "#1d2330", "#2f6fed"],
+  sepia: ["#f4ecd8", "#4b3b2a", "#8a5a00"],
+  dark: ["#15171c", "#d6d9df", "#8fb0ff"],
+};
+function textSettings() {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  return {
+    size: Math.min(220, Math.max(70, +store.get("text.size", 100) || 100)),
+    width: store.get("text.width", "40"),
+    theme: store.get("text.theme", dark ? "dark" : "original"),
+  };
+}
+const tocList = () => (R.book.toc.length ? R.book.toc : R.book.spine.map((_, n) => ({ n, frag: "" })));
+const chapterUrl = n => `${API}chapter?book=${R.book.id}&n=${n}&v=${R.book.v}`;
+function textFrame() {
+  let f = $("tframe");
+  if (!f) {
+    $("stage").innerHTML = "";
+    f = document.createElement("iframe");
+    f.id = "tframe";
+    f.title = "Chapter";
+    f.setAttribute("sandbox", "allow-same-origin");
+    f.addEventListener("load", onChapterLoad);
+    $("stage").appendChild(f);
+  }
+  return f;
+}
+function renderText() {
+  $("endPanel")?.remove();
+  const f = textFrame(), url = chapterUrl(R.page);
+  if (f.dataset.url === url && f.contentDocument?.body) { placeText(); afterTurn(); return; }
+  f.dataset.url = url;
+  f.src = url;
+  afterTurn();
+}
+function frameScroller() {
+  const d = $("tframe")?.contentDocument;
+  return d && (d.scrollingElement || d.documentElement);
+}
+function styleChapter() {
+  const d = $("tframe")?.contentDocument;
+  if (!d?.documentElement) return;
+  const t = textSettings(), c = THEMES[t.theme];
+  let el = d.getElementById("shelf-reader-style");
+  if (!el) {
+    el = d.createElementNS("http://www.w3.org/1999/xhtml", "style");
+    el.id = "shelf-reader-style";
+    (d.head || d.documentElement).appendChild(el);
+  }
+  el.textContent = `html { font-size: ${t.size}% !important; ${c ? `background: ${c[0]} !important;` : "background: #fff;"} }
+    body { font-size: 1rem !important; max-width: ${t.width}em !important; margin: 0 auto !important;
+           padding: 1.5em 1.25em 3em !important; line-height: 1.6; overflow-wrap: break-word; }
+    img, svg, video { max-width: 100% !important; height: auto !important; }
+    ${c ? `body { background: transparent !important; color: ${c[1]} !important; }
+    body *:not(img):not(svg):not(svg *) { color: inherit !important; background-color: transparent !important; border-color: currentColor !important; }
+    a, a * { color: ${c[2]} !important; }` : ""}`;
+  $("tframe").style.background = c ? c[0] : "#fff";
+}
+function placeText() {
+  const se = frameScroller();
+  if (!se) return;
+  const target = R.frag && $("tframe").contentDocument.getElementById(R.frag);
+  if (target) target.scrollIntoView();
+  else se.scrollTop = R.pos * Math.max(0, se.scrollHeight - se.clientHeight);
+  R.frag = "";
+}
+function onChapterLoad() {
+  const f = $("tframe"), w = f.contentWindow, d = f.contentDocument;
+  if (!d?.documentElement || f.dataset.url !== chapterUrl(R.page)) return;
+  styleChapter();
+  placeText();
+  w.addEventListener("scroll", () => {
+    const se = frameScroller(), room = se.scrollHeight - se.clientHeight;
+    R.pos = room > 0 ? Math.min(1, se.scrollTop / room) : 1;
+    afterTurn();
+  }, { passive: true });
+  d.addEventListener("keydown", onKey);
+  d.addEventListener("click", onChapterClick);
+  w.focus();
+}
+function onChapterClick(e) {
+  const a = e.target.closest?.("a[href]");
+  if (!a) return;
+  const href = a.getAttribute("href");
+  if (href.startsWith("#")) return;  // same chapter: the browser scrolls there
+  e.preventDefault();
+  let url;
+  try { url = new URL(href, location.href); } catch { return; }
+  if (url.origin === location.origin && url.pathname === API + "res") {
+    const n = R.book.spine.indexOf(url.searchParams.get("path"));
+    if (n >= 0) Object.assign(R, { page: n, pos: 0, frag: decodeURIComponent(url.hash.slice(1)) }), render();
+  } else if (/^https?:$/.test(url.protocol)) {
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  }
+}
+function scrollText(dir) {
+  const se = frameScroller();
+  if (!se) return;
+  const atEnd = se.scrollTop + se.clientHeight >= se.scrollHeight - 2, atTop = se.scrollTop <= 0;
+  if (dir > 0 && atEnd) return go(1);
+  if (dir < 0 && atTop) return go(-1);
+  se.scrollBy({ top: dir * se.clientHeight * 0.9, behavior: "smooth" });
+}
+function textKey(e) {
+  const k = e.key;
+  if (k === " " || k === "PageDown") { e.preventDefault(); scrollText(e.shiftKey ? -1 : 1); return true; }
+  if (k === "PageUp") { e.preventDefault(); scrollText(-1); return true; }
+  if (k === "ArrowRight") { e.preventDefault(); go(1); return true; }
+  if (k === "ArrowLeft") { e.preventDefault(); go(-1); return true; }
+  if (k === "ArrowDown" || k === "ArrowUp") {
+    if (e.target.ownerDocument === document) { e.preventDefault(); frameScroller()?.scrollBy({ top: k === "ArrowDown" ? 60 : -60 }); }
+    return true;
+  }
+  return false;
+}
+function changeText(key, value) {
+  store.set("text." + key, value);
+  const keep = R.pos;
+  styleChapter();
+  R.pos = keep;
+  placeText();
+}
+$("tSmaller").onclick = () => changeText("size", textSettings().size - 10);
+$("tBigger").onclick = () => changeText("size", textSettings().size + 10);
+$("tWidth").onchange = () => changeText("width", $("tWidth").value);
+$("tTheme").onchange = () => changeText("theme", $("tTheme").value);
+$("tToc").onchange = () => {
+  const t = tocList()[+$("tToc").value];
+  if (t) { Object.assign(R, { page: t.n, pos: 0, frag: t.frag || "" }); render(); $("tframe")?.contentWindow?.focus(); }
+};
 
 /* ------------------------------------------------------------------ start */
 loadFacets();

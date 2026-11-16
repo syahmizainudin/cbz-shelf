@@ -4,7 +4,7 @@ Instructions for coding agents working in this repository. Read `README.md` for 
 
 ## What this repo is
 
-`cbz-shelf` is a local library and reader for `.cbz` comics. It scans folders into an SQLite database, keeps metadata, edits and reading progress there, and serves a library page and reader on cbz-webp's generic console server.
+`cbz-shelf` is a local library and reader for `.cbz` comics and EPUB books. It scans folders into an SQLite database, keeps metadata, edits and reading progress there, and serves a library page and reader on cbz-webp's generic console server.
 
 | Repo | Relation |
 |---|---|
@@ -15,11 +15,12 @@ Instructions for coding agents working in this repository. Read `README.md` for 
 | Path | What it is |
 |---|---|
 | `cbzshelf/meta.py` | `ComicInfo.xml` and file-name parsing; the file/user/effective metadata layers |
+| `cbzshelf/epub.py` | EPUB parsing (container, OPF, nav/NCX), picture-or-text classification, and rewriting a chapter's links for serving |
 | `cbzshelf/library.py` | `Library`: the schema, the background scanner, queries, edits, progress, pages and thumbnails |
 | `cbzshelf/web.py` | `LibraryAPI` (`state`, `get`, `post`) and `serve_shelf` |
 | `cbzshelf/ui.html` | The library page and reader: one file, CSS and JS inline, no external requests |
 | `cbzshelf/cli.py` | `ui`, `add`, `scan`, `roots`, `search` |
-| `tests/` | `test_library.py` (parsing, scanning, edits, missing files, search, pages), `test_web_cli.py` (endpoints, CLI); `helpers.make_cbz` builds archives |
+| `tests/` | `test_library.py` (parsing, scanning, edits, missing files, search, pages), `test_web_cli.py` (endpoints, CLI), `test_epub.py` (EPUB parsing, chapters, resources, migration); `helpers.make_cbz` and `helpers.make_epub` build books |
 
 ## Rules that protect the user's library
 
@@ -34,12 +35,17 @@ Instructions for coding agents working in this repository. Read `README.md` for 
    - Only `remove_missing` and `remove_root` delete rows, and both are explicit user actions.
    - A cancelled scan must not mark anything missing (it hasn't seen every file).
 4. **Ids, never paths, from requests.** `page` and `thumbnail` look up the archive path by book id. Never add an endpoint that takes a file path, other than adding a library folder (`add-root`, which only scans).
+   - `res?book=&path=` takes a name *inside* an EPUB, not a file path. `epub.safe_name` normalizes it, refuses `..`, absolute names and backslashes, and requires the exact name to be in that book's zip. Only pictures, stylesheets and fonts are served this way; chapters go through `chapter?book=&n=` by spine index.
 5. **Untrusted archives.** `ComicInfo.xml` is size-capped, and a DOCTYPE or ENTITY is refused before parsing. An unreadable archive is recorded with `error` and `pages = 0`, never raised out of the scanner.
+6. **Untrusted EPUB content.**
+   - EPUB XML (container, OPF, NCX) goes through `epub.safe_xml`: size cap, no ENTITY, no DOCTYPE internal subset. XHTML is only read with `html.parser`, never expanded as XML.
+   - `chapter` and `res` responses carry `EPUB_CSP` (no scripts, no outside requests, `sandbox allow-same-origin`). The page shows chapters in `<iframe sandbox="allow-same-origin">`, never with `allow-scripts`, so the page's own code can style the chapter but the chapter can't run any. Keep all three layers: the CSP, the sandbox, and `rewrite_chapter` removing scripts, event attributes, `<base>`, refreshes and embeds.
 
 ## Database and threads
 
 - One SQLite connection, `check_same_thread=False`, with every use under `self._lock` (an `RLock`), in WAL mode. Don't open other connections.
-- The schema is `CREATE ... IF NOT EXISTS`. To change it later, add a migration keyed on a stored version; never drop user data.
+- The base schema is `CREATE ... IF NOT EXISTS`. Changes go in `MIGRATIONS` in `library.py`: each step runs once, in order, and `PRAGMA user_version` counts the steps run. Add new steps at the end, never edit an old one, and never drop user data. `test_0_1_database_is_upgraded_and_keeps_data` covers the upgrade.
+- `books.kind` is `cbz`, `epub-image` or `epub-text`. For text books `pages` counts chapters, `progress.page` is the chapter and `progress.pos` (0–1) how far down it.
 - `book_search` is an FTS5 table keyed by book id. `_reindex` refreshes it after any change to a book's metadata or its series name. `_fts_query` turns user text into quoted prefix terms, so user input is never FTS syntax.
 - Every list endpoint is paginated (`limit` capped at 200). `/api/state` carries only `summary()`, because pages poll it often.
 - The scanner runs in its own thread. `scan()` queues work, and the loop's start and exit are decided under `_scan_cond` (`_scan_looping`), so queued work is never stranded.

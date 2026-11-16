@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/syahmizainudin/cbz-shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/syahmizainudin/cbz-shelf/actions/workflows/ci.yml)
 
-`cbz-shelf` is a library and reader for `.cbz` comics and manga that runs on your own computer. Add a top-level folder, and it scans every archive inside, groups the archives into series, and indexes their metadata for search. You then browse and read in the browser.
+`cbz-shelf` is a library and reader for `.cbz` comics and manga, and for EPUB books, that runs on your own computer. Add a top-level folder, and it scans every book inside, groups the archives into series, and indexes their metadata for search. You then browse and read in the browser.
 
 ## Install
 
@@ -33,7 +33,7 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 
 ## How the library is built
 
-- **Books:** every `.cbz` and `.zip` under a library folder, including subfolders. Hidden folders are skipped. `.cbr` (RAR) files aren't supported; convert them to `.cbz` first.
+- **Books:** every `.cbz`, `.zip` and `.epub` under a library folder, including subfolders. Hidden folders are skipped. `.cbr` (RAR) files aren't supported; convert them to `.cbz` first.
 - **Series:** each folder of archives is a series named after the folder. If an archive's `ComicInfo.xml` has a `Series`, that wins, so two files in one folder can belong to different series. Books are ordered by volume, then number, then file name (with `2` before `10`).
 - **Numbers:** taken from `ComicInfo.xml`, or else from the file name:
 
@@ -51,6 +51,13 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
   - the front-cover page.
 - **Pages:** the archive's images in natural order. `__MACOSX`, `.DS_Store` and other junk are skipped.
 - **Rescans** only reopen archives whose size or modification time changed.
+
+### EPUB books
+
+- **Picture EPUBs** (manga and comics, where every page is one picture) open in the comic reader, with all its layouts. `page-progression-direction="rtl"` makes them read right to left.
+- **Text EPUBs** (novels) open in the text reader, one chapter at a time.
+- **Metadata** comes from the book's package file: title, authors, subjects (as tags), publisher, language, date (the year), description, and the series and number from calibre's `calibre:series` or EPUB 3's `belongs-to-collection`.
+- **Covers:** the book's cover image, or else a plain cover with the title.
 
 ### Your edits and your files
 
@@ -77,6 +84,19 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 | Mouse and touch | Click or tap the left or right third to turn pages, and the middle to hide the bars. Swipe to turn pages |
 
 Your page is saved as you read. At the end of a book, the reader offers the next one in the series.
+
+### The text reader
+
+| | |
+|---|---|
+| Contents | The book's table of contents, to jump to a chapter |
+| Text | A− / A+ text size · Narrow, Medium or Wide lines · the book's colours, Light, Sepia or Dark |
+| Keys | Space / Page Down and Shift+Space / Page Up scroll a screen, and go on to the next or previous chapter at the end · ← → previous or next chapter · Home / End first or last chapter · F full screen · Esc back |
+| Links | Links to other chapters open them here. Links to websites open in a new tab |
+
+Your chapter and how far down it you are are saved as you read. Text settings are remembered in this browser.
+
+Chapters are shown in a frame that runs no scripts, and the server sends them with a Content-Security-Policy that blocks scripts, forms and anything from outside, so a book can't run code or contact other sites.
 
 ## Using it inside another tool
 

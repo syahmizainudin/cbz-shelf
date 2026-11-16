@@ -209,11 +209,10 @@ class LibraryTests(unittest.TestCase):
 
     def test_progress(self):
         b = self.book("Naruto v01")
-        self.assertEqual(self.lib.set_progress(b["id"], 1), {"page": 1, "finished": False})
+        self.assertEqual(self.lib.set_progress(b["id"], 1), {"page": 1, "pos": 0.0, "finished": False})
         self.assertEqual([x["id"] for x in self.lib.continue_reading()], [b["id"]])
-        self.assertEqual(
-            self.lib.set_progress(b["id"], 99), {"page": 2, "finished": True}
-        )  # clamped; last page
+        # clamped; last page
+        self.assertEqual(self.lib.set_progress(b["id"], 99), {"page": 2, "pos": 0.0, "finished": True})
         self.assertEqual(self.lib.continue_reading(), [])
         self.lib.clear_progress(b["id"])
         self.assertIsNone(self.lib.book_detail(b["id"])["progress"])

@@ -5,16 +5,24 @@ from __future__ import annotations
 import json
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 
-from cbzwebp.core import ARCHIVE_EXTS
 from cbzwebp.web import serve
 
-from .library import Library
+from .library import BOOK_EXTS, Library
 
 UI_HTML = (Path(__file__).parent / "ui.html").read_bytes()
 PREFIX = "/api/library/"
 IMAGE_CACHE = "private, max-age=86400"  # URLs carry the file time (&v=), so a changed file gets a new URL
 MAX_LIMIT = 200
+# EPUB chapters and their files are untrusted. They may load pictures, styles and fonts from this
+# server and nothing else; no scripts, forms or plugins run, even if a chapter is opened on its own.
+# "sandbox allow-same-origin" keeps the origin so the reader page can style and scroll the chapter.
+EPUB_CSP = (
+    "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; "
+    "script-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'; "
+    "sandbox allow-same-origin"
+)
 
 
 def _int(query: dict, key: str, default: int | None = None) -> int:
@@ -58,6 +66,20 @@ class LibraryAPI:
                 return _json(lib.facets())
             if action == "roots":
                 return _json(lib.roots())
+            if action in ("chapter", "res"):
+                book, v = _int(query, "book"), query.get("v", "")
+
+                def url_for(name: str, frag: str) -> str:
+                    url = f"{PREFIX}res?book={book}&path={quote(name, safe='/')}&v={quote(v)}"
+                    return url + (f"#{quote(frag, safe='')}" if frag else "")
+
+                if action == "chapter":
+                    data, ctype = lib.chapter(book, _int(query, "n"), url_for)
+                else:
+                    data, ctype = lib.resource(book, query.get("path", ""), url_for)
+                headers = {"Content-Type": ctype, "Content-Security-Policy": EPUB_CSP}
+                headers["Cache-Control"] = IMAGE_CACHE if v else "no-store"
+                return 200, headers, data
             if action == "page":
                 data, ctype = lib.page(_int(query, "book"), _int(query, "n"))
                 return 200, {"Content-Type": ctype, "Cache-Control": IMAGE_CACHE}, data
@@ -99,7 +121,10 @@ class LibraryAPI:
             if action == "progress":
                 finished = body.get("finished")
                 return 200, lib.set_progress(
-                    int(body["id"]), int(body.get("page", 0)), None if finished is None else bool(finished)
+                    int(body["id"]),
+                    int(body.get("page", 0)),
+                    None if finished is None else bool(finished),
+                    float(body.get("pos") or 0),
                 )
             if action == "clear-progress":
                 lib.clear_progress(int(body["id"]))
@@ -113,4 +138,4 @@ class LibraryAPI:
 
 def serve_shelf(port: int, library: Library) -> ThreadingHTTPServer:
     """This package's console: the library page at /."""
-    return serve(port, UI_HTML, {PREFIX: LibraryAPI(library)}, ARCHIVE_EXTS)
+    return serve(port, UI_HTML, {PREFIX: LibraryAPI(library)}, BOOK_EXTS)

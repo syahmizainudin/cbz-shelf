@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import posixpath
 import re
 import sqlite3
 import threading
@@ -24,9 +25,11 @@ from pathlib import Path, PurePosixPath
 from cbzwebp.core import IMAGE_EXTS, is_junk, natural_key, normalize_path
 from PIL import Image
 
+from . import epub as E
 from . import meta as M
 
 ARCHIVE_EXTS = (".cbz", ".zip")
+BOOK_EXTS = (*ARCHIVE_EXTS, ".epub")
 THUMB_SIZE = (320, 480)
 MIME = {
     ".jpg": "image/jpeg",
@@ -37,6 +40,16 @@ MIME = {
     ".bmp": "image/bmp",
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
+}
+# What an EPUB chapter may load besides images: its stylesheets and fonts.
+RESOURCE_MIME = {
+    **MIME,
+    ".svg": "image/svg+xml",
+    ".css": "text/css; charset=utf-8",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
 }
 SERIES_SETTINGS = {"mode": ("single", "double", "vertical"), "fit": ("width", "height", "original")}
 
@@ -74,6 +87,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS book_search USING fts5(
     title, series, authors, tags, summary, filename,
     tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
 """
+
+# Each step runs once, in order; PRAGMA user_version records how many have run. Never drop user data.
+MIGRATIONS = [
+    # 1 (0.2.0): EPUB books, and a position inside a text book's chapter.
+    """ALTER TABLE books ADD COLUMN kind TEXT NOT NULL DEFAULT 'cbz';   -- cbz | epub-image | epub-text
+       ALTER TABLE progress ADD COLUMN pos REAL NOT NULL DEFAULT 0;      -- 0-1 down the chapter (text books)""",
+]
 
 
 def default_db() -> Path:
@@ -120,7 +140,9 @@ class Library:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.executescript(SCHEMA)
+            self._migrate()
         self._pages_cache: OrderedDict[tuple[str, float], list[str]] = OrderedDict()
+        self._epub_cache: OrderedDict[tuple[str, float], E.EpubBook] = OrderedDict()
         # scanning
         self._scan_lock = threading.Lock()
         self._scan_cond = threading.Condition()
@@ -130,6 +152,20 @@ class Library:
         self._scan_looping = False  # set and cleared under _scan_cond, so scan() never misses an exiting loop
         self._stopping = False
         self.scan_state: dict = {"running": False, "root": None, "done": 0, "total": 0, "last": None}
+
+    def _migrate(self) -> None:
+        """Bring an older database up to date. Call with the lock held."""
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+        for n, step in enumerate(MIGRATIONS[version:], start=version + 1):
+            self._db.execute("BEGIN")
+            try:
+                for stmt in (x for x in step.split(";") if x.strip()):
+                    self._db.execute(stmt)
+                self._db.execute(f"PRAGMA user_version = {n}")
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
 
     # ------------------------------------------------------------ helpers
     def _q(self, sql: str, args=()) -> list[sqlite3.Row]:
@@ -259,7 +295,7 @@ class Library:
         if root_path.is_dir():
             for dirpath, dirnames, filenames in os.walk(root_path):
                 dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-                files += [Path(dirpath, f) for f in filenames if f.lower().endswith(ARCHIVE_EXTS)]
+                files += [Path(dirpath, f) for f in filenames if f.lower().endswith(BOOK_EXTS)]
         self.scan_state.update(total=len(files), done=0)
         known = {
             r["path"]: r
@@ -298,13 +334,19 @@ class Library:
         """Index one file now (e.g. a conversion just finished). False if it's outside the library."""
         f = normalize_path(str(path))
         root = self.root_for(f)
-        if not root or not f.is_file() or not f.name.lower().endswith(ARCHIVE_EXTS):
+        if not root or not f.is_file() or not f.name.lower().endswith(BOOK_EXTS):
             return False
         self._index_file(root, f, f.stat())
         self._drop_empty_series()
         return True
 
-    def _read_archive(self, f: Path) -> tuple[int, int, dict]:
+    def _read_archive(self, f: Path) -> tuple[int, int, dict, str]:
+        """(pages, cover page, metadata, kind) of a book file."""
+        if f.suffix.lower() == ".epub":
+            with zipfile.ZipFile(f) as zf:
+                book = E.parse(zf)
+            cover = book.images.index(book.cover) if book.cover in book.images else 0
+            return book.pages, cover, book.meta, book.kind
         with zipfile.ZipFile(f) as zf:
             pages = page_names(zf)
             file_meta: dict = {}
@@ -316,13 +358,14 @@ class Library:
                 file_meta, ci_cover = M.parse_comicinfo(zf.read(info))
                 if ci_cover is not None and 0 <= ci_cover < len(pages):
                     cover = ci_cover
-        return len(pages), cover, file_meta
+        return len(pages), cover, file_meta, "cbz"
 
     def _index_file(self, root: dict, f: Path, st: os.stat_result) -> str:
         error = None
+        kind = "epub-text" if f.suffix.lower() == ".epub" else "cbz"
         try:
-            pages, cover, ci = self._read_archive(f)
-        except (zipfile.BadZipFile, OSError, RuntimeError) as e:
+            pages, cover, ci, kind = self._read_archive(f)
+        except (zipfile.BadZipFile, OSError, RuntimeError, ValueError) as e:
             pages, cover, ci, error = 0, 0, {}, f"cannot read: {e}"
         file_meta = {**M.parse_filename(f.stem), **ci}
         file_meta.setdefault("title", f.stem)
@@ -341,18 +384,19 @@ class Library:
                 json.dumps(eff),
                 _sort_key(eff, f.name),
                 error,
+                kind,
             )
             if row:
                 book_id = row["id"]
                 self._db.execute(
                     """UPDATE books SET series_id=?, size=?, mtime=?, pages=?, cover=?, file_json=?, meta_json=?,
-                       sort_key=?, error=?, missing=0 WHERE id=?""",
+                       sort_key=?, error=?, kind=?, missing=0 WHERE id=?""",
                     (*values, book_id),
                 )
             else:
                 book_id = self._db.execute(
                     """INSERT INTO books(series_id, size, mtime, pages, cover, file_json, meta_json, sort_key, error,
-                       root_id, path, added_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       kind, root_id, path, added_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*values, root["id"], str(f), time.time()),
                 ).lastrowid
             self._reindex(book_id)
@@ -429,16 +473,25 @@ class Library:
             "error": r["error"],
             "v": int(r["mtime"]),
             "file": Path(r["path"]).name,
+            "kind": r["kind"],
         }
         if "page" in r.keys():
             d["progress"] = (
                 None
                 if r["page"] is None
-                else {"page": r["page"], "finished": bool(r["finished"]), "at": r["updated_at"]}
+                else {
+                    "page": r["page"],
+                    "pos": r["pos"],
+                    "finished": bool(r["finished"]),
+                    "at": r["updated_at"],
+                }
             )
         return d
 
-    BOOK_COLS = "b.id, b.series_id, b.path, b.meta_json, b.pages, b.missing, b.error, b.mtime, p.page, p.finished, p.updated_at"
+    BOOK_COLS = (
+        "b.id, b.series_id, b.path, b.meta_json, b.pages, b.missing, b.error, b.mtime, b.kind,"
+        " p.page, p.pos, p.finished, p.updated_at"
+    )
     BOOK_FROM = "books b LEFT JOIN progress p ON p.book_id = b.id"
 
     def series_list(
@@ -535,6 +588,12 @@ class Library:
             user_meta=json.loads(r["user_json"]),
             meta=json.loads(r["meta_json"]),
         )
+        if d["kind"] == "epub-text" and not d["missing"] and not d["error"]:
+            try:
+                book = self._epub(self._book_file(book_id))
+                d["toc"], d["spine"] = book.toc, book.spine
+            except (OSError, ValueError, zipfile.BadZipFile):
+                d["toc"], d["spine"] = [], []
         return d
 
     def search(self, q: str = "", tag: str = "", author: str = "", limit: int = 60, offset: int = 0) -> dict:
@@ -641,21 +700,25 @@ class Library:
                     self._reindex(b["id"])
         return self.series_detail(series_id)
 
-    def set_progress(self, book_id: int, page: int, finished: bool | None = None) -> dict:
-        r = self._one("SELECT pages FROM books WHERE id = ?", (book_id,))
+    def set_progress(self, book_id: int, page: int, finished: bool | None = None, pos: float = 0.0) -> dict:
+        """Save where the reader is. ``page`` is a page, or a chapter in a text book, where ``pos``
+        (0-1) is how far down that chapter."""
+        r = self._one("SELECT pages, kind FROM books WHERE id = ?", (book_id,))
         if not r:
             raise KeyError(f"no book {book_id}")
         page = max(0, min(int(page), max(r["pages"] - 1, 0)))
+        pos = max(0.0, min(float(pos), 1.0)) if pos == pos else 0.0  # NaN -> 0
         if finished is None:
-            finished = r["pages"] > 0 and page >= r["pages"] - 1
+            last = r["pages"] > 0 and page >= r["pages"] - 1
+            finished = last and (r["kind"] != "epub-text" or pos >= 0.98)
         with self._lock:
             self._db.execute(
-                """INSERT INTO progress(book_id, page, finished, updated_at) VALUES (?,?,?,?)
-                   ON CONFLICT(book_id) DO UPDATE SET page=excluded.page, finished=excluded.finished,
-                   updated_at=excluded.updated_at""",
-                (book_id, page, int(bool(finished)), time.time()),
+                """INSERT INTO progress(book_id, page, pos, finished, updated_at) VALUES (?,?,?,?,?)
+                   ON CONFLICT(book_id) DO UPDATE SET page=excluded.page, pos=excluded.pos,
+                   finished=excluded.finished, updated_at=excluded.updated_at""",
+                (book_id, page, pos, int(bool(finished)), time.time()),
             )
-        return {"page": page, "finished": bool(finished)}
+        return {"page": page, "pos": pos, "finished": bool(finished)}
 
     def clear_progress(self, book_id: int) -> None:
         with self._lock:
@@ -663,7 +726,7 @@ class Library:
 
     # ------------------------------------------------------------ pages and covers
     def _book_file(self, book_id: int) -> sqlite3.Row:
-        r = self._one("SELECT path, mtime, cover, missing FROM books WHERE id = ?", (int(book_id),))
+        r = self._one("SELECT path, mtime, cover, missing, kind FROM books WHERE id = ?", (int(book_id),))
         if not r:
             raise KeyError(f"no book {book_id}")
         if r["missing"]:
@@ -682,9 +745,33 @@ class Library:
                 self._pages_cache.popitem(last=False)
         return names
 
+    def _epub(self, r: sqlite3.Row) -> E.EpubBook:
+        key = (r["path"], r["mtime"])
+        with self._lock:
+            if key in self._epub_cache:
+                self._epub_cache.move_to_end(key)
+                return self._epub_cache[key]
+        with zipfile.ZipFile(r["path"]) as zf:
+            book = E.parse(zf)
+        with self._lock:
+            self._epub_cache[key] = book
+            while len(self._epub_cache) > 32:
+                self._epub_cache.popitem(last=False)
+        return book
+
     def page(self, book_id: int, n: int) -> tuple[bytes, str]:
-        """Page ``n`` (0-based) of a book: (bytes, content type)."""
+        """Page ``n`` (0-based) of a comic or picture EPUB: (bytes, content type)."""
         r = self._book_file(book_id)
+        if r["kind"] != "cbz":
+            if r["kind"] != "epub-image":
+                raise ValueError("this is a text book: it has chapters, not pages")
+            names = self._epub(r).images
+            if not 0 <= int(n) < len(names):
+                raise ValueError(f"page {n} out of range (0-{len(names) - 1})")
+            with zipfile.ZipFile(r["path"]) as zf:
+                return zf.read(names[int(n)]), RESOURCE_MIME.get(
+                    PurePosixPath(names[int(n)]).suffix.lower(), "application/octet-stream"
+                )
         with zipfile.ZipFile(r["path"]) as zf:
             names = self._pages(zf, (r["path"], r["mtime"]))
             if not 0 <= int(n) < len(names):
@@ -698,11 +785,16 @@ class Library:
         out = self.cache_dir / f"{int(book_id)}-{int(r['mtime'])}.webp"
         if out.is_file():
             return out.read_bytes()
-        data, _ = self.page(book_id, r["cover"])
-        with Image.open(io.BytesIO(data)) as im:
-            im.thumbnail(THUMB_SIZE)
-            buf = io.BytesIO()
-            im.convert("RGB").save(buf, "WEBP", quality=80, method=4)
+        buf = io.BytesIO()
+        try:
+            data = self._cover_bytes(book_id, r)
+            with Image.open(io.BytesIO(data)) as im:
+                im.thumbnail(THUMB_SIZE)
+                im.convert("RGB").save(buf, "WEBP", quality=80, method=4)
+        except (OSError, ValueError, LookupError, Image.DecompressionBombError):
+            if r["kind"] == "cbz":
+                raise
+            buf = io.BytesIO(self._placeholder_cover(book_id))  # an EPUB without a usable picture
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for old in self.cache_dir.glob(f"{int(book_id)}-*.webp"):
             old.unlink(missing_ok=True)
@@ -710,6 +802,86 @@ class Library:
         tmp.write_bytes(buf.getvalue())
         os.replace(tmp, out)
         return buf.getvalue()
+
+    def _cover_bytes(self, book_id: int, r: sqlite3.Row) -> bytes:
+        if r["kind"] == "cbz":
+            return self.page(book_id, r["cover"])[0]
+        book = self._epub(r)
+        if not book.cover:
+            raise LookupError("no cover")
+        with zipfile.ZipFile(r["path"]) as zf:
+            if book.cover.lower().endswith(".svg"):
+                raise LookupError("no cover (SVG)")
+            return zf.read(book.cover)
+
+    def _placeholder_cover(self, book_id: int) -> bytes:
+        """A plain cover with the title, for books without a picture."""
+        from PIL import ImageDraw, ImageFont
+
+        m = json.loads(self._one("SELECT meta_json FROM books WHERE id = ?", (book_id,))["meta_json"])
+        title = str(m.get("title") or "")
+        hue = sum(title.encode()) % 360
+        im = Image.new("RGB", THUMB_SIZE, f"hsl({hue}, 35%, 38%)")
+        d = ImageDraw.Draw(im)
+        try:
+            font = ImageFont.load_default(size=28)
+        except TypeError:  # Pillow < 10.1
+            font = ImageFont.load_default()
+        lines, line = [], ""
+        for word in title.split():
+            trial = f"{line} {word}".strip()
+            if d.textlength(trial, font=font) <= THUMB_SIZE[0] - 40 or not line:
+                line = trial
+            else:
+                lines.append(line)
+                line = word
+        lines.append(line)
+        y = 60
+        for text in lines[:8]:
+            d.text((20, y), text, fill="white", font=font)
+            y += 36
+        d.rectangle([0, THUMB_SIZE[1] - 14, THUMB_SIZE[0], THUMB_SIZE[1]], fill=f"hsl({hue}, 45%, 60%)")
+        buf = io.BytesIO()
+        im.save(buf, "WEBP", quality=80)
+        return buf.getvalue()
+
+    # ------------------------------------------------------------ text EPUBs
+    def chapter(self, book_id: int, n: int, url_for) -> tuple[bytes, str]:
+        """Chapter ``n`` of a text EPUB, with links rewritten by ``url_for(zip_name, fragment)``."""
+        r = self._book_file(book_id)
+        if r["kind"] != "epub-text":
+            raise ValueError("only text books have chapters")
+        book = self._epub(r)
+        if not 0 <= int(n) < len(book.spine):
+            raise ValueError(f"chapter {n} out of range (0-{len(book.spine) - 1})")
+        name = book.spine[int(n)]
+        with zipfile.ZipFile(r["path"]) as zf:
+            info = zf.getinfo(name)
+            if info.file_size > E.DOC_MAX:
+                raise ValueError("this chapter is too large to show")
+            text = E.rewrite_chapter(E.decode(zf.read(info)), name, url_for)
+        xhtml = E.well_formed_xml(text)
+        return text.encode("utf-8"), ("application/xhtml+xml" if xhtml else "text/html") + "; charset=utf-8"
+
+    def resource(self, book_id: int, raw_name: str, url_for) -> tuple[bytes, str]:
+        """A picture, stylesheet or font inside an EPUB, by its name in the archive.
+
+        The name must be a file that is in this book's archive; nothing outside it can be named."""
+        r = self._book_file(book_id)
+        if r["kind"] == "cbz":
+            raise ValueError("only EPUB books have resources")
+        with zipfile.ZipFile(r["path"]) as zf:
+            name = E.safe_name(raw_name, set(zf.namelist()))
+            ctype = RESOURCE_MIME.get(PurePosixPath(name).suffix.lower())
+            if ctype is None:
+                raise ValueError("not a picture, stylesheet or font")
+            info = zf.getinfo(name)
+            if info.file_size > 64 * 1024 * 1024:
+                raise ValueError("resource too large")
+            data = zf.read(info)
+        if name.lower().endswith(".css"):
+            data = E.rewrite_css(E.decode(data), posixpath.dirname(name), url_for).encode("utf-8")
+        return data, ctype
 
 
 def _fts_query(q: str) -> str:

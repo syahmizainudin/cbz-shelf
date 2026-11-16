@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 
-from helpers import comicinfo, make_cbz
+from helpers import comicinfo, make_cbz, make_epub
 
 from cbzshelf import __version__, cli
 from cbzshelf.library import Library
@@ -120,7 +120,9 @@ class WebTests(Base):
         status, _, d = self.post("edit-book", {"id": b1, "changes": {"title": "Renamed", "tags": "x, y"}})
         self.assertEqual((status, d["title"], d["meta"]["tags"]), (200, "Renamed", ["x", "y"]))
         self.assertEqual(self.post("edit-book", {"id": b1, "changes": {"year": "soon"}})[0], 400)
-        self.assertEqual(self.post("progress", {"id": b1, "page": 2})[2], {"page": 2, "finished": False})
+        self.assertEqual(
+            self.post("progress", {"id": b1, "page": 2})[2], {"page": 2, "pos": 0.0, "finished": False}
+        )
         self.assertEqual([b["id"] for b in self.get("continue")[2]], [b1])
         sid = self.get("series")[2]["items"][0]["id"]
         _, _, s = self.post("edit-series", {"id": sid, "changes": {"mode": "vertical", "rtl": True}})
@@ -137,6 +139,35 @@ class WebTests(Base):
         self.assertEqual(self.post("add-root", {"path": str(other)})[0], 400)
         self.assertEqual(self.post("remove-root", {"id": r["id"]})[2], {"ok": True})
         self.assertEqual(self.post("remove-missing", {})[2], {"removed": 0})
+
+    def test_epub_chapters_and_resources(self):
+        make_epub(self.root / "Novel" / "Novel.epub", title="Novel")
+        self.post("scan", {})
+        self.lib.wait_scan(30)
+        bid = self.get("search", q="novel")[2]["items"][0]["id"]
+        _, _, book = self.get("book", id=bid)
+        self.assertEqual((book["kind"], len(book["toc"])), ("epub-text", 3))
+        status, h, body = self.get("chapter", book=bid, n=0, v=book["v"])
+        self.assertEqual((status, h["Content-Type"]), (200, "application/xhtml+xml; charset=utf-8"))
+        csp = h["Content-Security-Policy"]
+        for part in (
+            "default-src 'none'",
+            "script-src 'none'",
+            "sandbox allow-same-origin",
+            "form-action 'none'",
+        ):
+            self.assertIn(part, csp)
+        self.assertIn(f"/api/library/res?book={bid}&amp;path=OEBPS/Styles/book.css".encode(), body)
+        status, h, _ = self.get("res", book=bid, path="OEBPS/Images/bg.png", v=1)
+        self.assertEqual((status, h["Content-Type"]), (200, "image/png"))
+        self.assertIn("sandbox", h["Content-Security-Policy"])
+        self.assertEqual(self.get("res", book=bid, path="../../etc/passwd")[0], 400)
+        self.assertEqual(self.get("res", book=bid, path="OEBPS/missing.png")[0], 404)
+        self.assertEqual(self.get("chapter", book=self.book_ids()[0], n=0)[0], 400)  # a comic has no chapters
+        _, _, p = self.post("progress", {"id": bid, "page": 1, "pos": 0.25})
+        self.assertEqual(p, {"page": 1, "pos": 0.25, "finished": False})
+        _, _, r = self.request("GET", "/api/dirs?path=" + quote(str(self.root / "Novel")))
+        self.assertEqual(r["files"], 1)  # the folder browser counts .epub files
 
     def test_dirs_count_archives(self):
         _, _, r = self.request("GET", "/api/dirs?path=" + quote(str(self.root / "Blue")))
