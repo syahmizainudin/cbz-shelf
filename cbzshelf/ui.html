@@ -789,8 +789,13 @@ function styleChapter() {
     body { font-size: 1rem !important; max-width: ${t.width}em !important; margin: 0 auto !important;
            padding: 1.5em 1.25em 3em !important; line-height: 1.6; overflow-wrap: break-word; }
     img, svg, video { max-width: 100% !important; height: auto !important; }
+    #shelf-end { all: initial; display: block; max-width: ${t.width}em; margin: 3em auto 1em; padding: 1.25em 0 0;
+                 border-top: 1px solid ${c ? c[1] + "40" : "#0002"}; font: 15px/1.4 system-ui, sans-serif;
+                 color: ${c ? c[1] : "#555"}; text-align: center; }
+    #shelf-end button { all: initial; display: inline-block; margin-top: .6em; padding: .55em 1.1em; border-radius: 8px; cursor: pointer;
+                        font: 600 15px/1.4 system-ui, sans-serif; background: ${c ? c[2] : "#2f6fed"}; color: ${c && c[0] !== "#ffffff" ? c[0] : "#fff"}; }
     ${c ? `body { background: transparent !important; color: ${c[1]} !important; }
-    body *:not(img):not(svg):not(svg *) { color: inherit !important; background-color: transparent !important; border-color: currentColor !important; }
+    body *:not(img):not(svg):not(svg *):not(#shelf-end):not(#shelf-end *) { color: inherit !important; background-color: transparent !important; border-color: currentColor !important; }
     a, a * { color: ${c[2]} !important; }` : ""}`;
   $("tframe").style.background = c ? c[0] : "#fff";
 }
@@ -802,9 +807,24 @@ function placeText() {
   else se.scrollTop = R.pos * Math.max(0, se.scrollHeight - se.clientHeight);
   R.frag = "";
 }
+// The reader's own end-of-chapter footer, so moving on never depends on links in the book.
+function addChapterEnd(d) {
+  const X = "http://www.w3.org/1999/xhtml", el = d.createElementNS(X, "div");
+  el.id = "shelf-end";
+  const last = R.page >= R.book.pages - 1;
+  const next = tocList().find(t => t.n === R.page + 1);
+  el.append(d.createTextNode(last ? "End of the book" : `End of chapter ${R.page + 1}`));
+  const btn = d.createElementNS(X, "button");
+  btn.id = "shelf-next";
+  btn.type = "button";
+  btn.textContent = last ? "Finish" : `Next: ${next?.title || `Chapter ${R.page + 2}`} ›`;
+  el.append(d.createElementNS(X, "br"), btn);
+  (d.body || d.documentElement).appendChild(el);
+}
 function onChapterLoad() {
   const f = $("tframe"), w = f.contentWindow, d = f.contentDocument;
   if (!d?.documentElement || f.dataset.url !== chapterUrl(R.page)) return;
+  addChapterEnd(d);
   styleChapter();
   placeText();
   w.addEventListener("scroll", () => {
@@ -824,6 +844,7 @@ function onChapterLoad() {
   w.focus();
 }
 function onChapterClick(e) {
+  if (e.target.closest?.("#shelf-next")) { e.preventDefault(); return go(1); }
   const a = e.target.closest?.("a[href]");
   if (!a) {
     // Like the comic reader: the left third goes back a screen, the right third forward, the middle shows or hides the bars.

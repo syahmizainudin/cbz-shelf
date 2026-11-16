@@ -7,6 +7,7 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 ## 0.2.1
 
 - Text reader: click or tap the left or right third of the page to go back or forward a screen, as in the comic reader, and the middle to hide the bars. ‹ ›, ← → and swipes also turn a screen, going on to the next or previous chapter at the ends. Contents and the slider still jump between chapters.
+- Text reader: each chapter ends with the reader's own footer and a **Next: <chapter>** button (or **Finish** on the last one), so moving on doesn't depend on links in the book.
 
 ## 0.2.0
 
