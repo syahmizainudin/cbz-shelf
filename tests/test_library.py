@@ -168,6 +168,24 @@ class LibraryTests(unittest.TestCase):
         d1, d2 = self.lib.book_detail(v1["id"], user=5), self.lib.book_detail(v2["id"], user=5)
         self.assertEqual((d1["progress"]["page"], d1["favourite"], d2["progress"]["page"]), (1, True, 0))
 
+    def test_reader_settings_are_per_user_over_the_shared_ones(self):
+        sid = self.series("Naruto")["id"]
+        self.lib.edit_series(sid, {"mode": "double"})  # shared default
+        self.lib.set_reader_prefs(sid, {"mode": "vertical", "rtl": False}, user=2)
+        self.assertEqual(self.lib.series_detail(sid)["reader"]["mode"], "double")
+        mine = self.lib.series_detail(sid, user=2)
+        self.assertEqual(
+            (mine["reader"], mine["reader_mine"]["mode"]),
+            ({"rtl": False, "mode": "vertical", "fit": "height"}, "vertical"),
+        )
+        self.lib.set_reader_prefs(sid, {"mode": None}, user=2)
+        self.assertEqual(self.lib.series_detail(sid, user=2)["reader"]["mode"], "double")
+        for bad in ({"mode": "sideways"}, {"rtl": "yes"}, {"zoom": 2}):
+            with self.assertRaises(ValueError):
+                self.lib.set_reader_prefs(sid, bad, user=2)
+        with self.assertRaises(KeyError):
+            self.lib.set_reader_prefs(999, {}, user=2)
+
     def test_removing_a_folder_forgets_its_favourites(self):
         self.lib.set_favourite("series", self.series("Naruto")["id"])
         self.lib.set_favourite("book", self.book("Saga 001")["id"])

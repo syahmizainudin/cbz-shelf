@@ -14,7 +14,7 @@ from helpers import comicinfo, make_cbz, make_epub
 
 from cbzshelf import __version__, cli
 from cbzshelf.library import Library
-from cbzshelf.web import serve_shelf
+from cbzshelf.web import LibraryAPI, serve_shelf
 
 
 class Base(unittest.TestCase):
@@ -196,6 +196,43 @@ class WebTests(Base):
             403,
         )
         self.assertEqual(self.request("GET", "/api/library/series", headers={"Host": "evil.example"})[0], 403)
+
+
+class PermissionTests(Base):
+    """A host (harbor) passes ``can``; what it withholds is refused with 403 and hidden in state."""
+
+    def setUp(self):
+        super().setUp()
+        self.lib = Library(self.db, self.dir / "thumbs")
+        self.lib.add_root(str(self.root))
+        self.lib.wait_scan(30)
+        self.perms = {"library.read"}
+        self.api = LibraryAPI(self.lib, user_of=lambda: 3, can=lambda p: p in self.perms)
+
+    def tearDown(self):
+        self.lib.close()
+        super().tearDown()
+
+    def test_reader_only(self):
+        st = self.api.state()
+        self.assertEqual(st["library_can"], {"edit": False, "manage": False})
+        self.assertEqual(self.api.get("series", {})[0], 200)
+        sid = json.loads(self.api.get("series", {})[2])["items"][0]["id"]
+        self.assertEqual(self.api.post("reader-settings", {"id": sid, "changes": {"fit": "width"}})[0], 200)
+        for action, body in (
+            ("edit-series", {"id": sid, "changes": {"name": "X"}}),
+            ("scan", {}),
+            ("add-root", {"path": "/"}),
+        ):
+            self.assertEqual(
+                self.api.post(action, body), (403, {"error": "you don't have permission for this"})
+            )
+        self.assertEqual(self.api.get("roots", {})[0], 403)
+        self.perms = set()
+        self.assertEqual(self.api.state(), {})
+        self.assertEqual(self.api.get("series", {})[0], 403)
+        self.perms = {"library.read", "library.edit", "library.manage"}
+        self.assertEqual(self.api.post("edit-series", {"id": sid, "changes": {"name": "X"}})[0], 200)
 
 
 class CliTests(Base):

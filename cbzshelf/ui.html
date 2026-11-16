@@ -381,7 +381,7 @@ async function showSeries(id) {
           <div class="actions">
             ${next ? `<button class="primary" data-book="${next.id}">${next.progress ? "Continue" : "Read"} ${esc(numLabel(next) || next.title)}</button>` : ""}
             <button data-fav="series:${s.id}" class="fav-toggle" aria-pressed="${s.favourite}">${s.favourite ? "★ Favourite" : "☆ Favourite"}</button>
-            <button data-act="editSeries">Edit series</button>
+            ${can.edit ? `<button data-act="editSeries">Edit series</button>` : ""}
             <span class="muted">Reader: ${s.reader.rtl ? "right to left" : "left to right"}, ${s.reader.mode}</span>
           </div>
         </div>
@@ -462,6 +462,8 @@ async function openBook(id) {
     el.placeholder = list(b.file_meta[f]);
   }
   $("f-rtl").value = b.user_meta.rtl === undefined ? "" : String(b.user_meta.rtl);
+  for (const el of $("bookForm").elements) el.disabled = !can.edit;
+  $("bookSave").hidden = !can.edit;
   $("bookFile").textContent = `${b.file} · ${unit(b, b.pages)}` + (b.error ? ` · ${b.error}` : "");
   $("bookRead").textContent = b.progress && !b.progress.finished ? `Continue (${isText(b) ? "chapter" : "page"} ${b.progress.page + 1})` : "Read";
   $("bookRead").disabled = $("bookRestart").disabled = b.missing || !b.pages;
@@ -578,11 +580,23 @@ $("removeMissing").onclick = async () => {
 };
 $("openFolders").onclick = openFolders;
 
+/* ------------------------------------------------------------------ permissions */
+// What this user may do. Standalone, everything; inside harbor, from its roles.
+let can = { edit: true, manage: true };
+function applyCan(next) {
+  if (!next || (next.edit === can.edit && next.manage === can.manage)) return;
+  can = next;
+  $("openFolders").hidden = !can.manage;
+  if (!can.manage && $("foldersDlg").open) $("foldersDlg").close();
+  if (location.hash) route();
+}
+
 /* ------------------------------------------------------------------ status polling */
 let lastScanDone = null;
 async function poll() {
   try {
     const st = await fetch("/api/state").then(r => { if (signedOut(r)) throw new Error("signed out"); return r.json(); });
+    applyCan(st.library_can);
     const L = st.library, scan = L.scan;
     $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
     $("scanChip").hidden = !scan.running;
@@ -607,7 +621,7 @@ async function openReader(bookId, startPage) {
     if (book.missing || !book.pages) return openBook(bookId);
     const series = await get("series-detail", { id: book.series_id });
     Object.assign(R, { book, series, mode: series.reader.mode, fit: series.reader.fit });
-    R.rtl = book.user_meta.rtl ?? series.user.rtl ?? book.meta.rtl ?? series.reader.rtl;
+    R.rtl = series.reader_mine?.rtl ?? book.user_meta.rtl ?? series.user.rtl ?? book.meta.rtl ?? series.reader.rtl;
     R.page = startPage ?? (book.progress && !book.progress.finished ? book.progress.page : 0);
     R.text = isText(book);
     R.pos = startPage == null && book.progress && !book.progress.finished ? book.progress.pos || 0 : 0;
@@ -751,8 +765,9 @@ function closeReader() {
   R.book = null;
   route();
 }
+// Your own layout, fit and direction for this series; other people keep theirs.
 async function saveSeriesSetting(changes) {
-  try { await post("edit-series", { id: R.series.id, changes }); } catch {}
+  try { await post("reader-settings", { id: R.series.id, changes }); } catch {}
 }
 $("rClose").onclick = closeReader;
 $("rPrev").onclick = () => (R.text ? scrollText(-1) : leftSide());
@@ -969,9 +984,8 @@ $("tToc").onchange = () => {
 };
 
 /* ------------------------------------------------------------------ start */
-loadFacets();
-route();
-poll();
+// Permissions first, so the first view doesn't show buttons this user can't use.
+poll().finally(() => { loadFacets(); route(); });
 </script>
 </body>
 </html>

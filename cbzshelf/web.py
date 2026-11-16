@@ -41,22 +41,47 @@ def _flag(query: dict, key: str) -> bool:
     return str(query.get(key, "")).lower() in ("1", "true", "yes")
 
 
+# Permissions a host (harbor) can withhold through ``can``. Standalone, everything is allowed.
+READ, EDIT, MANAGE = "library.read", "library.edit", "library.manage"
+POST_NEEDS = {
+    "edit-book": EDIT,
+    "edit-series": EDIT,
+    "add-root": MANAGE,
+    "remove-root": MANAGE,
+    "scan": MANAGE,
+    "cancel-scan": MANAGE,
+    "remove-missing": MANAGE,
+}
+GET_NEEDS = {"roots": MANAGE}
+DENIED = {"error": "you don't have permission for this"}
+
+
 class LibraryAPI:
     """The library's endpoints. ``user_of()`` names the user each request acts for: reading
-    progress, Continue reading and favourites are kept per user. Without accounts it is user 0."""
+    progress, Continue reading, favourites and reader settings are kept per user. Without accounts
+    it is user 0. ``can(permission)`` says whether that user may read (``library.read``), edit
+    details (``library.edit``) or manage folders and scans (``library.manage``)."""
 
-    def __init__(self, library: Library, user_of=None):
+    def __init__(self, library: Library, user_of=None, can=None):
         self.lib = library
         self.user_of = user_of or (lambda: 0)
+        self.can = can or (lambda permission: True)
 
     def state(self) -> dict:
-        return {"library": self.lib.summary()}
+        if not self.can(READ):
+            return {}
+        return {
+            "library": self.lib.summary(),
+            "library_can": {"edit": self.can(EDIT), "manage": self.can(MANAGE)},
+        }
 
     def get(self, action: str, query: dict) -> tuple[int, dict, bytes]:
         lib = self.lib
         limit = min(_int(query, "limit", 60), MAX_LIMIT)
         offset = max(_int(query, "offset", 0), 0)
         filters = {k: query.get(k, "") for k in ("q", "tag", "author")}
+        if not self.can(GET_NEEDS.get(action, READ)):
+            return _json(DENIED, 403)
         user = int(self.user_of())
         mine = {"favourite": _flag(query, "favourite"), "user": user}
         try:
@@ -111,6 +136,8 @@ class LibraryAPI:
 
     def post(self, action: str, body: dict) -> tuple[int, dict]:
         lib = self.lib
+        if not self.can(POST_NEEDS.get(action, READ)):
+            return 403, DENIED
         user = int(self.user_of())
         try:
             if action == "add-root":
@@ -148,6 +175,8 @@ class LibraryAPI:
                 if not isinstance(on, bool):
                     raise ValueError("on must be true or false")
                 return 200, {"favourite": lib.set_favourite(kind, int(body["id"]), on, user=user)}
+            if action == "reader-settings":
+                return 200, lib.set_reader_prefs(int(body["id"]), body.get("changes") or {}, user=user)
             if action == "hide-continue":
                 return 200, {"hidden": lib.hide_continue(int(body["id"]), user=user)}
             if action == "clear-continue":

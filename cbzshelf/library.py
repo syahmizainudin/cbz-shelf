@@ -112,6 +112,11 @@ MIGRATIONS = [
            user_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('series', 'book')),
            item_id INTEGER NOT NULL, added_at REAL NOT NULL,
            PRIMARY KEY (user_id, kind, item_id))""",
+    # 3 (0.4.0): each user's own reader settings per series (layout, fit, direction), over the
+    # shared series settings.
+    """CREATE TABLE reader_prefs (
+           user_id INTEGER NOT NULL, series_id INTEGER NOT NULL, prefs_json TEXT NOT NULL DEFAULT '{}',
+           PRIMARY KEY (user_id, series_id))""",
 ]
 
 
@@ -450,6 +455,7 @@ class Library:
         self._db.execute(
             "DELETE FROM favourites WHERE kind = 'series' AND item_id NOT IN (SELECT id FROM series)"
         )
+        self._db.execute("DELETE FROM reader_prefs WHERE series_id NOT IN (SELECT id FROM series)")
 
     def _reindex(self, book_id: int) -> None:
         """Refresh one book's search entry. Call with the lock held."""
@@ -585,6 +591,10 @@ class Library:
         if not s:
             raise KeyError(f"no series {series_id}")
         edits = json.loads(s["user_json"])
+        mine_row = self._one(
+            "SELECT prefs_json FROM reader_prefs WHERE user_id = ? AND series_id = ?", (int(user), s["id"])
+        )
+        mine = json.loads(mine_row["prefs_json"]) if mine_row else {}
         books = [
             self._book_dict(r)
             for r in self._q(
@@ -612,10 +622,11 @@ class Library:
             "authors": edits.get("authors") or authors,
             "tags": edits.get("tags") or tags,
             "reader": {
-                "rtl": edits.get("rtl", file_rtl),
-                "mode": edits.get("mode", "single"),
-                "fit": edits.get("fit", "height"),
+                "rtl": mine.get("rtl", edits.get("rtl", file_rtl)),
+                "mode": mine.get("mode", edits.get("mode", "single")),
+                "fit": mine.get("fit", edits.get("fit", "height")),
             },
+            "reader_mine": mine,
             "books": books,
             "favourite": self._is_favourite(user, "series", s["id"]),
         }
@@ -702,6 +713,7 @@ class Library:
             for table, cols in (
                 ("progress", "book_id, page, pos, finished, hidden, updated_at"),
                 ("favourites", "kind, item_id, added_at"),
+                ("reader_prefs", "series_id, prefs_json"),
             ):
                 moved += self._db.execute(
                     f"INSERT OR IGNORE INTO {table}(user_id, {cols}) SELECT ?, {cols} FROM {table} WHERE user_id = ?",
@@ -710,6 +722,37 @@ class Library:
                 self._db.execute(f"DELETE FROM {table} WHERE user_id = ?", (int(from_user),))
             self._db.execute("COMMIT")
         return moved
+
+    def set_reader_prefs(self, series_id: int, changes: dict, user: int = 0) -> dict:
+        """One user's reader settings for a series (``mode``, ``fit``, ``rtl``); None removes one.
+        They win over the shared series settings for that user only."""
+        if not self._one("SELECT 1 FROM series WHERE id = ?", (int(series_id),)):
+            raise KeyError(f"no series {series_id}")
+        row = self._one(
+            "SELECT prefs_json FROM reader_prefs WHERE user_id = ? AND series_id = ?",
+            (int(user), int(series_id)),
+        )
+        prefs = json.loads(row["prefs_json"]) if row else {}
+        for key, value in changes.items():
+            if key not in ("mode", "fit", "rtl"):
+                raise ValueError(f"unknown reader setting: {key}")
+            if value is None:
+                prefs.pop(key, None)
+            elif key == "rtl":
+                if not isinstance(value, bool):
+                    raise ValueError("rtl must be true or false")
+                prefs[key] = value
+            elif value not in SERIES_SETTINGS[key]:
+                raise ValueError(f"{key} must be one of {', '.join(SERIES_SETTINGS[key])}")
+            else:
+                prefs[key] = value
+        with self._lock:
+            self._db.execute(
+                """INSERT INTO reader_prefs(user_id, series_id, prefs_json) VALUES (?,?,?)
+                   ON CONFLICT(user_id, series_id) DO UPDATE SET prefs_json = excluded.prefs_json""",
+                (int(user), int(series_id), json.dumps(prefs)),
+            )
+        return self.series_detail(series_id, user=user)["reader"]
 
     # ------------------------------------------------------------ favourites
     def _is_favourite(self, user: int, kind: str, item_id: int) -> bool:

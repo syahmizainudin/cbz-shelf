@@ -4,6 +4,12 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.4.0
+
+- **Permissions for hosts with accounts:** `LibraryAPI(..., can=...)`. Editing book and series details needs `library.edit`; folders, scans and forgetting missing books need `library.manage`; everything else needs `library.read`. Refused actions get 403, and the page hides **Folders**, **Edit series** and the details form for users without them. Standalone, everything is allowed as before.
+- **Reader settings per user:** layout, fit and direction chosen in the reader are saved for you only (new endpoint `reader-settings`, migration 3). The shared series settings stay the default.
+- Depends on cbz-webp 0.4.1.
+
 ## 0.3.2
 
 - Depends on cbz-webp 0.4.0 (was 0.3.0), so it installs alongside harbor, which needs 0.4.0's sign-in support. No other change.
