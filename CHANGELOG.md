@@ -4,6 +4,8 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.3.1
+
 - `Library.give_user_data(from_user, to_user)` moves progress and favourites to another user (harbor gives the one user's data to its first account).
 - Inside a host with accounts, an expired session sends the page to the host's sign-in page.
 
