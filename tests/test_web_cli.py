@@ -231,6 +231,7 @@ class PermissionTests(Base):
         self.perms = set()
         self.assertEqual(self.api.state(), {})
         self.assertEqual(self.api.get("series", {})[0], 403)
+        self.perms = {"library.read"}
         self.assertEqual(
             self.api.post("prefs", {"changes": {"text_width": "56"}}), (200, {"text_width": "56"})
         )
