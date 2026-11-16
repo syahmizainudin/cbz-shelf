@@ -4,6 +4,8 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.3.0
+
 - **Favourites:** star series and books. Home gets a Favourites row, and a **★ Favourites** filter shows only them. Endpoint `favourite` (`kind`, `id`, `on`); `series` and `search` take `favourite=1`.
 - **Continue reading:** × on a card hides it and **Clear all** empties the row, keeping your pages; reading a book again brings it back. Endpoints `hide-continue` and `clear-continue`.
 - Progress, Continue reading and favourites are kept per user (migration 2). Without accounts everything is user 0, as before. `LibraryAPI(library, user_of)` lets a host with accounts say who is signed in.
