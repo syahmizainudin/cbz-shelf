@@ -50,6 +50,7 @@ Instructions for coding agents working in this repository. Read `README.md` for 
 - The reader saves progress debounced (800 ms) and on close (`keepalive`). Per-series reader settings (`mode`, `fit`, `rtl`) are saved when changed.
 - Direction rules: in right-to-left books, the left screen side and the left arrow go forward, and two-page spreads use `row-reverse`. Vertical mode tracks the current page with an `IntersectionObserver`.
 - Works offline and in dark mode (CSS variables on `:root`). The page also runs inside harbor's iframe at `/library`, so keep every URL absolute from `/` and don't assume it's the top window.
+- In a frame, the reader posts `{type: "shelf-reader", open: true|false}` to the parent (same origin only) when a book opens and closes. harbor hides its sidebar on it. Keep the message's shape.
 
 ## Testing
 

@@ -4,6 +4,9 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.1.2
+
+- In a frame, the reader tells the parent page when a book opens and closes (`postMessage` `{type: "shelf-reader", open}`, same origin), so harbor can give it the whole window.
 - A series with one book no longer shows its cover twice: the series page's top cover is left out when the book's card already shows it.
 
 ## 0.1.1

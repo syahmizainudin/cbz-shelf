@@ -82,6 +82,8 @@ Your page is saved as you read. At the end of a book, the reader offers the next
 
 `cbzshelf.web.LibraryAPI(library)` is the library as an API for [cbz-webp's console server](https://github.com/syahmizainudin/cbz-webp#using-the-console-in-another-tool), mounted at `/api/library/`, and `cbzshelf.web.UI_HTML` is the page. [harbor](https://github.com/syahmizainudin/harbor) uses them for its Library tab.
 
+When the page runs in a frame, the reader posts `{type: "shelf-reader", open: true}` to the parent page (same origin only) when a book opens, and `open: false` when it closes, so the host can give the reader the whole window.
+
 ## Development
 
 ```bash

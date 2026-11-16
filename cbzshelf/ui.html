@@ -532,11 +532,16 @@ async function openReader(bookId, startPage) {
   } catch (e) { return alert(e.message); }
   $("reader").hidden = false;
   document.body.style.overflow = "hidden";
+  tellParent(true);
   $("rTitle").textContent = `${R.series.name} — ${R.book.title}`;
   $("rSlider").max = R.book.pages;
   syncControls();
   render();
   $("stage").focus();
+}
+// Inside a host page's frame (harbor), say when the reader opens or closes, so the host can give it the whole window.
+function tellParent(open) {
+  if (window.parent !== window) window.parent.postMessage({ type: "shelf-reader", open }, location.origin);
 }
 function syncControls() {
   $("rMode").value = R.mode; $("rFit").value = R.fit;
@@ -631,6 +636,7 @@ function closeReader() {
   if (R.observer) R.observer.disconnect();
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   $("reader").hidden = true;
+  tellParent(false);
   $("stage").innerHTML = "";
   document.body.style.overflow = "";
   R.book = null;

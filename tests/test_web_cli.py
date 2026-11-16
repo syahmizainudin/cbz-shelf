@@ -75,6 +75,7 @@ class WebTests(Base):
         self.assertEqual(status, 200)
         self.assertIn(b"<title>Shelf</title>", page)
         self.assertEqual(h["X-Frame-Options"], "SAMEORIGIN")
+        self.assertIn(b'type: "shelf-reader"', page)  # hosts such as harbor listen for it
         _, _, st = self.request("GET", "/api/state")
         self.assertEqual((st["library"]["books"], st["library"]["series"]), (2, 1))
 
