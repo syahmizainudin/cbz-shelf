@@ -91,7 +91,8 @@ Your page is saved as you read. At the end of a book, the reader offers the next
 |---|---|
 | Contents | The book's table of contents, to jump to a chapter |
 | Text | A− / A+ text size · Narrow, Medium or Wide lines · the book's colours, Light, Sepia or Dark |
-| Keys | Space / Page Down and Shift+Space / Page Up scroll a screen, and go on to the next or previous chapter at the end · ← → previous or next chapter · Home / End first or last chapter · F full screen · Esc back |
+| Turning | Click or tap the right third of the page, or ›, → , Space or Page Down, for the next screen; the left third, ‹, ←, Shift+Space or Page Up to go back. At the end of a chapter this goes on to the next one. Swipe left or right too. Click the middle to hide the bars |
+| Keys | ↑ ↓ scroll a little · Home / End first or last chapter · F full screen · Esc back |
 | Links | Links to other chapters open them here. Links to websites open in a new tab |
 
 Your chapter and how far down it you are are saved as you read. Text settings are remembered in this browser.
