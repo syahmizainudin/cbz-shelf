@@ -693,6 +693,24 @@ class Library:
                 )
             return self._db.execute(sql, args).rowcount
 
+    def give_user_data(self, from_user: int, to_user: int) -> int:
+        """Move one user's progress and favourites to another, keeping the receiver's own where
+        both have one (a host turning user 0 into its first account). Returns rows moved."""
+        moved = 0
+        with self._lock:
+            self._db.execute("BEGIN")
+            for table, cols in (
+                ("progress", "book_id, page, pos, finished, hidden, updated_at"),
+                ("favourites", "kind, item_id, added_at"),
+            ):
+                moved += self._db.execute(
+                    f"INSERT OR IGNORE INTO {table}(user_id, {cols}) SELECT ?, {cols} FROM {table} WHERE user_id = ?",
+                    (int(to_user), int(from_user)),
+                ).rowcount
+                self._db.execute(f"DELETE FROM {table} WHERE user_id = ?", (int(from_user),))
+            self._db.execute("COMMIT")
+        return moved
+
     # ------------------------------------------------------------ favourites
     def _is_favourite(self, user: int, kind: str, item_id: int) -> bool:
         return bool(

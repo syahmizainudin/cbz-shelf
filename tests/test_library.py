@@ -157,6 +157,17 @@ class LibraryTests(unittest.TestCase):
         self.lib.clear_progress(v1["id"], user=1)
         self.assertEqual(self.lib.book_detail(v1["id"])["progress"]["page"], 0)
 
+    def test_give_user_data(self):
+        v1, v2 = self.book("Naruto v01"), self.book("Naruto v02")
+        self.lib.set_progress(v1["id"], 1)
+        self.lib.set_progress(v2["id"], 1)
+        self.lib.set_favourite("book", v1["id"])
+        self.lib.set_progress(v2["id"], 0, user=5)  # the receiver's own progress wins
+        self.assertEqual(self.lib.give_user_data(0, 5), 2)
+        self.assertIsNone(self.lib.book_detail(v1["id"])["progress"])
+        d1, d2 = self.lib.book_detail(v1["id"], user=5), self.lib.book_detail(v2["id"], user=5)
+        self.assertEqual((d1["progress"]["page"], d1["favourite"], d2["progress"]["page"]), (1, True, 0))
+
     def test_removing_a_folder_forgets_its_favourites(self):
         self.lib.set_favourite("series", self.series("Naruto")["id"])
         self.lib.set_favourite("book", self.book("Saga 001")["id"])

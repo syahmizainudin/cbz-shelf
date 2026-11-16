@@ -249,14 +249,21 @@ const store = {
 };
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function qs(o) { return Object.entries(o).filter(([, v]) => v !== "" && v != null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&"); }
+// In a host with accounts (harbor), an expired session gets 401: go to its sign-in page.
+function signedOut(r) {
+  if (r.status === 401) { (window.top || window).location.href = "/login"; return true; }
+  return false;
+}
 async function get(action, params = {}) {
   const r = await fetch(API + action + "?" + qs(params));
+  if (signedOut(r)) throw new Error("signed out");
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || r.statusText);
   return d;
 }
 async function post(action, body, opts = {}) {
   const r = await fetch(API + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), ...opts });
+  if (signedOut(r)) throw new Error("signed out");
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || r.statusText);
   return d;
@@ -575,7 +582,7 @@ $("openFolders").onclick = openFolders;
 let lastScanDone = null;
 async function poll() {
   try {
-    const st = await fetch("/api/state").then(r => r.json());
+    const st = await fetch("/api/state").then(r => { if (signedOut(r)) throw new Error("signed out"); return r.json(); });
     const L = st.library, scan = L.scan;
     $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
     $("scanChip").hidden = !scan.running;

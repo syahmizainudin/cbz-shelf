@@ -4,6 +4,9 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+- `Library.give_user_data(from_user, to_user)` moves progress and favourites to another user (harbor gives the one user's data to its first account).
+- Inside a host with accounts, an expired session sends the page to the host's sign-in page.
+
 ## 0.3.0
 
 - **Favourites:** star series and books. Home gets a Favourites row, and a **★ Favourites** filter shows only them. Endpoint `favourite` (`kind`, `id`, `on`); `series` and `search` take `favourite=1`.
