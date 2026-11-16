@@ -4,6 +4,8 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+- A series with one book no longer shows its cover twice: the series page's top cover is left out when the book's card already shows it.
+
 ## 0.1.1
 
 - The Folders window keeps one size: the folder browser fills it and scrolls inside, and the list of library folders scrolls in its own area, instead of the window growing and shrinking with every folder.

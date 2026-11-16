@@ -323,11 +323,11 @@ async function showSeries(id) {
   try {
     const s = await get("series-detail", { id });
     current.series = s;
-    const first = s.books.find(b => !b.missing);
+    const first = s.books.find(b => !b.missing);  // the series cover; left out for one book, whose card shows it
     const next = s.books.find(b => !b.missing && !b.progress?.finished);
     $("view").innerHTML = `
       <div class="series-head">
-        <div class="cover">${first ? `<img src="${thumb(first)}" alt="">` : ""}</div>
+        ${first && s.books.length > 1 ? `<div class="cover"><img src="${thumb(first)}" alt=""></div>` : ""}
         <div class="info">
           <h2>${esc(s.name)}</h2>
           <div class="muted">${s.books.length} book${s.books.length === 1 ? "" : "s"} · ${esc(s.folder)}</div>
