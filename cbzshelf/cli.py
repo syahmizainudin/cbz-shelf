@@ -13,7 +13,9 @@ from .library import Library, default_db
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="cbz-shelf", description="A library and reader for .cbz comics and EPUB books.")
+    ap = argparse.ArgumentParser(
+        prog="cbz-shelf", description="A library and reader for .cbz comics and EPUB books."
+    )
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument(
         "--db",
