@@ -4,6 +4,10 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.3.2
+
+- Depends on cbz-webp 0.4.0 (was 0.3.0), so it installs alongside harbor, which needs 0.4.0's sign-in support. No other change.
+
 ## 0.3.1
 
 - `Library.give_user_data(from_user, to_user)` moves progress and favourites to another user (harbor gives the one user's data to its first account).
