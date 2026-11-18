@@ -58,7 +58,7 @@ Instructions for coding agents working in this repository. Read `README.md` for 
 
 ## The page
 
-- Pages and covers use `&v=<file mtime>` in their URLs and are sent with `Cache-Control: private, max-age=86400`, so a changed file gets new URLs.
+- Pages, covers, chapters and EPUB resources use `&v=<file mtime>` in their URLs, so a changed file gets new URLs. Pages, chapters and resources with `v` are sent with `Cache-Control: private, max-age=31536000, immutable`. Covers keep `private, max-age=86400`: a placeholder cover is drawn from the title, which an edit changes without changing the URL.
 - The reader saves progress debounced (800 ms) and on close (`keepalive`). Per-series reader settings (`mode`, `fit`, `rtl`) are saved when changed.
 - Direction rules: in right-to-left books, the left screen side and the left arrow go forward, and two-page spreads use `row-reverse`. Vertical mode tracks the current page with an `IntersectionObserver`.
 - Works offline and in dark mode (CSS variables on `:root`). The page also runs inside harbor's iframe at `/library`, so keep every URL absolute from `/` and don't assume it's the top window.

@@ -13,7 +13,12 @@ from .library import BOOK_EXTS, Library
 
 UI_HTML = (Path(__file__).parent / "ui.html").read_bytes()
 PREFIX = "/api/library/"
-IMAGE_CACHE = "private, max-age=86400"  # URLs carry the file time (&v=), so a changed file gets a new URL
+# Pages, chapters and EPUB files: their URLs carry the book's file time (&v=), and what they return
+# comes from that file alone, so a changed file gets new URLs and a URL's answer never changes.
+FILE_CACHE = "private, max-age=31536000, immutable"
+# Covers stay at a day. The URL is keyed by the file time too, but a book without a picture gets a
+# placeholder drawn from its title, and editing the title changes it without changing the URL.
+IMAGE_CACHE = "private, max-age=86400"
 MAX_LIMIT = 200
 # EPUB chapters and their files are untrusted. They may load pictures, styles and fonts from this
 # server and nothing else; no scripts, forms or plugins run, even if a chapter is opened on its own.
@@ -116,11 +121,13 @@ class LibraryAPI:
                 else:
                     data, ctype = lib.resource(book, query.get("path", ""), url_for)
                 headers = {"Content-Type": ctype, "Content-Security-Policy": EPUB_CSP}
-                headers["Cache-Control"] = IMAGE_CACHE if v else "no-store"
+                headers["Cache-Control"] = FILE_CACHE if v else "no-store"
                 return 200, headers, data
             if action == "page":
                 data, ctype = lib.page(_int(query, "book"), _int(query, "n"))
-                return 200, {"Content-Type": ctype, "Cache-Control": IMAGE_CACHE}, data
+                # Without &v= the URL isn't tied to the file's version.
+                cache = FILE_CACHE if query.get("v") else IMAGE_CACHE
+                return 200, {"Content-Type": ctype, "Cache-Control": cache}, data
             if action == "thumb":
                 return (
                     200,

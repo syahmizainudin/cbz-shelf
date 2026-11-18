@@ -97,11 +97,15 @@ class WebTests(Base):
         bid = self.book_ids()[0]
         status, h, data = self.get("page", book=bid, n=1, v=1)
         self.assertEqual(
-            (status, h["Content-Type"], h["Cache-Control"]), (200, "image/webp", "private, max-age=86400")
+            (status, h["Content-Type"], h["Cache-Control"]),
+            (200, "image/webp", "private, max-age=31536000, immutable"),
         )
         self.assertTrue(data.startswith(b"RIFF"))
-        status, h, data = self.get("thumb", book=bid)
-        self.assertEqual((status, h["Content-Type"]), (200, "image/webp"))
+        self.assertEqual(self.get("page", book=bid, n=1)[1]["Cache-Control"], "private, max-age=86400")
+        status, h, data = self.get("thumb", book=bid, v=1)
+        self.assertEqual(
+            (status, h["Content-Type"], h["Cache-Control"]), (200, "image/webp", "private, max-age=86400")
+        )
 
     def test_errors(self):
         self.assertEqual(self.get("book", id=999)[0], 404)
@@ -166,6 +170,8 @@ class WebTests(Base):
         self.assertEqual((book["kind"], len(book["toc"])), ("epub-text", 3))
         status, h, body = self.get("chapter", book=bid, n=0, v=book["v"])
         self.assertEqual((status, h["Content-Type"]), (200, "application/xhtml+xml; charset=utf-8"))
+        self.assertEqual(h["Cache-Control"], "private, max-age=31536000, immutable")
+        self.assertEqual(self.get("chapter", book=bid, n=0)[1]["Cache-Control"], "no-store")
         csp = h["Content-Security-Policy"]
         for part in (
             "default-src 'none'",
@@ -177,6 +183,7 @@ class WebTests(Base):
         self.assertIn(f"/api/library/res?book={bid}&amp;path=OEBPS/Styles/book.css".encode(), body)
         status, h, _ = self.get("res", book=bid, path="OEBPS/Images/bg.png", v=1)
         self.assertEqual((status, h["Content-Type"]), (200, "image/png"))
+        self.assertEqual(h["Cache-Control"], "private, max-age=31536000, immutable")
         self.assertIn("sandbox", h["Content-Security-Policy"])
         self.assertEqual(self.get("res", book=bid, path="../../etc/passwd")[0], 400)
         self.assertEqual(self.get("res", book=bid, path="OEBPS/missing.png")[0], 404)
