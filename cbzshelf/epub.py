@@ -294,6 +294,10 @@ def parse(zf: zipfile.ZipFile) -> EpubBook:
     pictures: list[list[str]] = []
     texty = 0
     for name in spine:
+        # Settled: one text page makes it a text book (whose pictures aren't kept), and the cover
+        # fallback below only looks at the first two documents. The rest needn't be read.
+        if texty and len(pictures) >= 2:
+            break
         try:
             doc = decode(_read(zf, name, DOC_MAX))
         except EpubError:

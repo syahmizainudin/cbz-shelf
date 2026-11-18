@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from helpers import CONTAINER, make_cbz, make_epub
 
@@ -70,6 +71,28 @@ class ParseTests(unittest.TestCase):
         b = self.parse(make_epub(self.dir / "c.epub", meta_extra=meta, nav=False))
         self.assertEqual((b.meta["series"], b.meta["number"]), ("Saga", 3.5))
         self.assertEqual(b.toc, [])  # no nav and no NCX
+
+    def test_text_first_then_pictures_stops_reading_early(self):
+        def chapter(i):
+            if i == 0:
+                return "<p>" + "Words of the story. " * 60 + "</p>"
+            return f'<div><img src="../Images/{"cover" if i == 1 else "bg"}.png" alt=""/></div>'
+
+        path = make_epub(self.dir / "mixed.epub", chapters=5, chapter_html=chapter)
+        with zipfile.ZipFile(path) as z:
+            entries = {n: z.read(n) for n in z.namelist()}
+        opf = entries["OEBPS/content.opf"].decode().replace(' properties="cover-image"', "")
+        entries["OEBPS/content.opf"] = opf.encode()
+        with zipfile.ZipFile(path, "w") as z:
+            for n, d in entries.items():
+                z.writestr(n, d)
+        fed = []
+        real_feed = E._DocScan.feed
+        with mock.patch.object(E._DocScan, "feed", lambda s, d: fed.append(d) or real_feed(s, d)):
+            b = self.parse(path)
+        self.assertEqual(len(fed), 2)  # a text page and two documents are enough to decide
+        self.assertEqual((b.kind, b.pages, b.images), ("epub-text", 5, []))
+        self.assertEqual(b.cover, "OEBPS/Images/cover.png")  # the fallback: first picture near the start
 
     def test_entities_and_bad_files_refused(self):
         bomb = self.dir / "bomb.epub"
