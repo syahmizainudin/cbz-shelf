@@ -4,6 +4,15 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+- Faster scans: books are written 100 at a time, each batch in one transaction, instead of three or four commits per book. Files are still read with no lock held.
+- Migration 5 adds two indexes (`books(missing, root_id)`, `books(series_id, missing, sort_key)`) for the counts `/api/state` reports and for series covers. It adds nothing else.
+- A text EPUB stops being read for classification once it is known to be a text book.
+- A changed book's old cached cover is deleted when the scan sees the change, instead of the cache folder being searched on every new cover.
+- Pages, chapters and EPUB files with `&v=` are sent with `Cache-Control: private, max-age=31536000, immutable`. Covers keep one day, since a placeholder cover follows the title.
+- The page asks `/api/state` every 5 s (1.5 s during a scan), one request at a time, and not at all while the tab is hidden, the reader is open, or harbor shows another tab.
+- Starring a book or series, or removing one from Continue reading, redraws only that row, keeping "Show more" pages and the scroll position.
+- Whether a chapter is well-formed XHTML is remembered per chapter.
+
 ## 0.4.1
 
 - The text reader's size, line width and colours are saved per user in the library database (endpoint `prefs`, migration 4), so they follow you to another browser. This browser's copy is used until they load.
