@@ -241,6 +241,25 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.lib.thumbnail(b["id"]), first)
         self.assertEqual(files[0].stat().st_mtime, mtime)
 
+    def test_changed_file_drops_its_old_thumbnail(self):
+        b = self.book("Naruto v01")
+        other = self.book("Naruto v02")
+        self.lib.thumbnail(b["id"])
+        self.lib.thumbnail(other["id"])
+        thumbs = self.dir / "thumbs"
+        old = thumbs / f"{b['id']}-{b['v']}.webp"
+        self.assertTrue(old.is_file())
+        path = self.root / "Naruto" / "Naruto v01.cbz"
+        make_cbz(path, n_pages=4)
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        self.lib.scan()
+        self.lib.wait_scan(30)
+        self.assertFalse(old.exists())
+        self.assertTrue((thumbs / f"{other['id']}-{other['v']}.webp").is_file())  # unchanged: kept
+        self.lib.thumbnail(b["id"])
+        new_v = self.lib.book_detail(b["id"])["v"]
+        self.assertEqual([p.name for p in thumbs.glob(f"{b['id']}-*.webp")], [f"{b['id']}-{new_v}.webp"])
+
     def test_search_and_facets(self):
         self.assertEqual([b["title"] for b in self.lib.search("kishi")["items"]], ["Naruto v01"])
         self.assertEqual([b["title"] for b in self.lib.search("vaughan saga")["items"]], ["Saga 001"])

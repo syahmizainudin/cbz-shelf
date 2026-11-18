@@ -439,22 +439,25 @@ class Library:
         """Add or update rows for books read by ``_read_book``, in one transaction.
 
         The transaction holds ``_lock`` from BEGIN to COMMIT and covers only database writes: the
-        connection is shared, so another thread's write must never land inside it."""
+        connection is shared, so another thread's write must never land inside it. Covers made
+        for a file's old version are deleted after the commit."""
         with self._lock:
             self._db.execute("BEGIN")
             try:
-                for b in books:
-                    self._write_book(root, b)
+                stale = [t for b in books if (t := self._write_book(root, b))]
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
+        for thumb in stale:
+            thumb.unlink(missing_ok=True)
 
-    def _write_book(self, root: dict, b: dict) -> None:
-        """One book's row and search entry. Call inside ``_write_books``' transaction."""
+    def _write_book(self, root: dict, b: dict) -> Path | None:
+        """One book's row and search entry. Call inside ``_write_books``' transaction. Returns the
+        cached cover of the file's old version, if the file has changed."""
         f, st, file_meta = b["path"], b["st"], b["file_meta"]
         series_id = self._series_for(root, f, b["series"])
-        row = self._db.execute("SELECT id, user_json FROM books WHERE path = ?", (str(f),)).fetchone()
+        row = self._db.execute("SELECT id, user_json, mtime FROM books WHERE path = ?", (str(f),)).fetchone()
         user = json.loads(row["user_json"]) if row else {}
         eff = M.effective(file_meta, user)
         values = (
@@ -483,6 +486,9 @@ class Library:
                 (*values, root["id"], str(f), time.time()),
             ).lastrowid
         self._reindex(book_id)
+        if row and row["mtime"] != st.st_mtime:
+            return self.cache_dir / f"{int(book_id)}-{int(row['mtime'])}.webp"
+        return None
 
     def _series_for(self, root: dict, f: Path, ci_series: str | None) -> int:
         folder = str(f.parent)
@@ -1046,9 +1052,8 @@ class Library:
             if r["kind"] == "cbz":
                 raise
             buf = io.BytesIO(self._placeholder_cover(book_id))  # an EPUB without a usable picture
+        # A cover made for an older version of the file is deleted when a scan sees the change.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        for old in self.cache_dir.glob(f"{int(book_id)}-*.webp"):
-            old.unlink(missing_ok=True)
         tmp = out.with_suffix(".tmp")
         tmp.write_bytes(buf.getvalue())
         os.replace(tmp, out)
