@@ -180,6 +180,8 @@ class Library:
             self._migrate()
         self._pages_cache: OrderedDict[tuple[str, float], list[str]] = OrderedDict()
         self._epub_cache: OrderedDict[tuple[str, float], E.EpubBook] = OrderedDict()
+        # (path, mtime, chapter) -> whether that chapter is well-formed XHTML
+        self._xhtml_cache: OrderedDict[tuple[str, float, int], bool] = OrderedDict()
         # scanning
         self._scan_lock = threading.Lock()
         self._scan_cond = threading.Condition()
@@ -1095,7 +1097,9 @@ class Library:
             if info.file_size > E.DOC_MAX:
                 raise ValueError("this chapter is too large to show")
             text = E.rewrite_chapter(E.decode(zf.read(info)), name, url_for)
-        xhtml = E.well_formed_xml(text)
+        xhtml = self._cached(
+            self._xhtml_cache, (r["path"], r["mtime"], int(n)), 256, lambda: E.well_formed_xml(text)
+        )
         return text.encode("utf-8"), ("application/xhtml+xml" if xhtml else "text/html") + "; charset=utf-8"
 
     def resource(self, book_id: int, raw_name: str, url_for) -> tuple[bytes, str]:

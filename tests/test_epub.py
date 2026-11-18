@@ -225,8 +225,14 @@ class LibraryEpubTests(unittest.TestCase):
             self.root / "Loose" / "Loose.epub", title="Loose", chapter_html=lambda i: "<p>a&nbsp;b<br></p>"
         )
         self.lib.scan_file(self.root / "Loose" / "Loose.epub")
-        _, ctype = self.lib.chapter(self.book("Loose")["id"], 0, url_for)
-        self.assertEqual(ctype, "text/html; charset=utf-8")
+        checks = []
+        real = E.well_formed_xml
+        with mock.patch.object(E, "well_formed_xml", lambda t: checks.append(t) or real(t)):
+            for _ in range(2):
+                _, ctype = self.lib.chapter(self.book("Loose")["id"], 0, url_for)
+                self.assertEqual(ctype, "text/html; charset=utf-8")
+            self.lib.chapter(self.book("Loose")["id"], 1, url_for)
+        self.assertEqual(len(checks), 2)  # once per chapter, then from the cache
 
     def test_text_progress_with_position(self):
         tale = self.book("The Tale")
