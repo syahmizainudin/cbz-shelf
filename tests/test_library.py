@@ -317,6 +317,8 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.lib.remove_missing(), 1)
         with self.assertRaises(KeyError):
             self.lib.book_detail(b["id"])
+        self.assertEqual(self.lib._q("SELECT count(*) FROM book_search WHERE rowid = ?", (b["id"],))[0][0], 0)
+        self.assertEqual(self.lib._q("SELECT count(*) FROM book_search")[0][0], self.lib.summary()["books"])
 
     def test_progress(self):
         b = self.book("Naruto v01")

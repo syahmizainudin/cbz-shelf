@@ -249,10 +249,10 @@ class Library:
     def remove_root(self, root_id: int) -> bool:
         """Forget a folder and everything in it (books, edits, progress). Files are not touched."""
         with self._lock:
-            ids = [r["id"] for r in self._db.execute("SELECT id FROM books WHERE root_id = ?", (root_id,))]
             self._db.execute("BEGIN")
-            for book_id in ids:
-                self._db.execute("DELETE FROM book_search WHERE rowid = ?", (book_id,))
+            self._db.execute(
+                "DELETE FROM book_search WHERE rowid IN (SELECT id FROM books WHERE root_id = ?)", (root_id,)
+            )
             self._db.execute("DELETE FROM books WHERE root_id = ?", (root_id,))
             self._db.execute("DELETE FROM series WHERE root_id = ?", (root_id,))
             n = self._db.execute("DELETE FROM roots WHERE id = ?", (root_id,)).rowcount
@@ -547,14 +547,14 @@ class Library:
         """Forget books whose files are gone, with their edits and progress."""
         where, args = ("missing = 1 AND root_id = ?", (root_id,)) if root_id else ("missing = 1", ())
         with self._lock:
-            ids = [r["id"] for r in self._db.execute(f"SELECT id FROM books WHERE {where}", args)]
             self._db.execute("BEGIN")
-            for book_id in ids:
-                self._db.execute("DELETE FROM book_search WHERE rowid = ?", (book_id,))
-                self._db.execute("DELETE FROM books WHERE id = ?", (book_id,))
+            self._db.execute(
+                f"DELETE FROM book_search WHERE rowid IN (SELECT id FROM books WHERE {where})", args
+            )
+            removed = self._db.execute(f"DELETE FROM books WHERE {where}", args).rowcount
             self._db.execute("COMMIT")
         self._drop_empty_series()
-        return len(ids)
+        return removed
 
     # ------------------------------------------------------------ reading data
     def _book_dict(self, r: sqlite3.Row) -> dict:
@@ -658,18 +658,12 @@ class Library:
             "SELECT prefs_json FROM reader_prefs WHERE user_id = ? AND series_id = ?", (int(user), s["id"])
         )
         mine = json.loads(mine_row["prefs_json"]) if mine_row else {}
-        books = [
-            self._book_dict(r)
-            for r in self._q(
-                f"SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM} WHERE b.series_id = ? ORDER BY b.sort_key",
-                (int(user), int(user), series_id),
-            )
-        ]
-        rtl_votes = [
-            json.loads(r["meta_json"]).get("rtl")
-            for r in self._q("SELECT meta_json FROM books WHERE series_id = ?", (series_id,))
-        ]
-        file_rtl = any(v is True for v in rtl_votes)
+        rows = self._q(
+            f"SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM} WHERE b.series_id = ? ORDER BY b.sort_key",
+            (int(user), int(user), series_id),
+        )
+        books = [self._book_dict(r) for r in rows]
+        file_rtl = any(json.loads(r["meta_json"]).get("rtl") is True for r in rows)
         authors: list[str] = []
         tags: list[str] = []
         for b in books:
@@ -801,20 +795,9 @@ class Library:
                 raise ValueError(f"unknown reader setting: {key}")
             if value is None:
                 prefs.pop(key, None)
-            elif key == "rtl":
-                if not isinstance(value, bool):
-                    raise ValueError("rtl must be true or false")
-                prefs[key] = value
-            elif value not in SERIES_SETTINGS[key]:
-                raise ValueError(f"{key} must be one of {', '.join(SERIES_SETTINGS[key])}")
             else:
-                prefs[key] = value
-        with self._lock:
-            self._db.execute(
-                """INSERT INTO reader_prefs(user_id, series_id, prefs_json) VALUES (?,?,?)
-                   ON CONFLICT(user_id, series_id) DO UPDATE SET prefs_json = excluded.prefs_json""",
-                (int(user), int(series_id), json.dumps(prefs)),
-            )
+                prefs[key] = _check_reader_setting(key, value)
+        self._save_prefs("reader_prefs", {"user_id": int(user), "series_id": int(series_id)}, prefs)
         return self.series_detail(series_id, user=user)["reader"]
 
     def user_prefs(self, user: int = 0) -> dict:
@@ -833,13 +816,18 @@ class Library:
                 raise ValueError(f"bad value for {key}")
             else:
                 prefs[key] = value
+        self._save_prefs("user_prefs", {"user_id": int(user)}, prefs)
+        return prefs
+
+    def _save_prefs(self, table: str, key: dict, prefs: dict) -> None:
+        """Insert or replace one ``prefs_json`` row of ``reader_prefs`` or ``user_prefs``."""
+        cols = ", ".join(key)
         with self._lock:
             self._db.execute(
-                """INSERT INTO user_prefs(user_id, prefs_json) VALUES (?, ?)
-                   ON CONFLICT(user_id) DO UPDATE SET prefs_json = excluded.prefs_json""",
-                (int(user), json.dumps(prefs)),
+                f"""INSERT INTO {table}({cols}, prefs_json) VALUES ({", ".join("?" * (len(key) + 1))})
+                    ON CONFLICT({cols}) DO UPDATE SET prefs_json = excluded.prefs_json""",
+                (*key.values(), json.dumps(prefs)),
             )
-        return prefs
 
     # ------------------------------------------------------------ favourites
     def _is_favourite(self, user: int, kind: str, item_id: int) -> bool:
@@ -929,14 +917,8 @@ class Library:
                     user[key] = str(value).strip()[:10000]
                 elif key in ("authors", "tags"):
                     user[key] = M.clean_user_changes({key: value})[key]
-                elif key == "rtl":
-                    if not isinstance(value, bool):
-                        raise ValueError("rtl must be true or false")
-                    user[key] = value
-                elif key in SERIES_SETTINGS:
-                    if value not in SERIES_SETTINGS[key]:
-                        raise ValueError(f"{key} must be one of {', '.join(SERIES_SETTINGS[key])}")
-                    user[key] = value
+                elif key == "rtl" or key in SERIES_SETTINGS:
+                    user[key] = _check_reader_setting(key, value)
                 else:
                     raise ValueError(f"unknown series field: {key}")
             self._db.execute("BEGIN")
@@ -990,31 +972,28 @@ class Library:
             raise FileNotFoundError("the file for this book is missing")
         return r
 
+    def _cached(self, cache: OrderedDict, key, size: int, make):
+        """``cache[key]``, made with ``make()`` (outside the lock) if missing; keeps ``size`` entries."""
+        with self._lock:
+            if key in cache:
+                cache.move_to_end(key)
+                return cache[key]
+        value = make()
+        with self._lock:
+            cache[key] = value
+            while len(cache) > size:
+                cache.popitem(last=False)
+        return value
+
     def _pages(self, zf: zipfile.ZipFile, key: tuple[str, float]) -> list[str]:
-        with self._lock:
-            if key in self._pages_cache:
-                self._pages_cache.move_to_end(key)
-                return self._pages_cache[key]
-        names = page_names(zf)
-        with self._lock:
-            self._pages_cache[key] = names
-            while len(self._pages_cache) > 64:
-                self._pages_cache.popitem(last=False)
-        return names
+        return self._cached(self._pages_cache, key, 64, lambda: page_names(zf))
 
     def _epub(self, r: sqlite3.Row) -> E.EpubBook:
-        key = (r["path"], r["mtime"])
-        with self._lock:
-            if key in self._epub_cache:
-                self._epub_cache.move_to_end(key)
-                return self._epub_cache[key]
-        with zipfile.ZipFile(r["path"]) as zf:
-            book = E.parse(zf)
-        with self._lock:
-            self._epub_cache[key] = book
-            while len(self._epub_cache) > 32:
-                self._epub_cache.popitem(last=False)
-        return book
+        def parse() -> E.EpubBook:
+            with zipfile.ZipFile(r["path"]) as zf:
+                return E.parse(zf)
+
+        return self._cached(self._epub_cache, (r["path"], r["mtime"]), 32, parse)
 
     def page(self, book_id: int, n: int) -> tuple[bytes, str]:
         """Page ``n`` (0-based) of a comic or picture EPUB: (bytes, content type)."""
@@ -1138,6 +1117,16 @@ class Library:
         if name.lower().endswith(".css"):
             data = E.rewrite_css(E.decode(data), posixpath.dirname(name), url_for).encode("utf-8")
         return data, ctype
+
+
+def _check_reader_setting(key: str, value):
+    """A reader setting's value (``rtl``, ``mode``, ``fit``), checked; raises ValueError if bad."""
+    if key == "rtl":
+        if not isinstance(value, bool):
+            raise ValueError("rtl must be true or false")
+    elif value not in SERIES_SETTINGS[key]:
+        raise ValueError(f"{key} must be one of {', '.join(SERIES_SETTINGS[key])}")
+    return value
 
 
 def _fts_query(q: str) -> str:
