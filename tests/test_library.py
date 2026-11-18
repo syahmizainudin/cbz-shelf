@@ -6,9 +6,11 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from helpers import comicinfo, make_cbz
 
+from cbzshelf import library as L
 from cbzshelf import meta as M
 from cbzshelf.library import Library
 
@@ -333,6 +335,66 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.lib.summary()["books"], 0)
         self.assertEqual(self.lib.search(limit=10)["items"], [])
         self.assertTrue((self.root / "Naruto" / "Naruto v01.cbz").exists())  # files untouched
+
+    def test_scan_writes_in_batches(self):
+        lib = Library(self.dir / "b" / "lib.db", self.dir / "b" / "thumbs")
+        self.addCleanup(lib.close)
+        sizes = []
+        real = lib._write_books
+        with (
+            mock.patch.object(L, "SCAN_BATCH", 2),
+            mock.patch.object(
+                lib, "_write_books", lambda root, books: sizes.append(len(books)) or real(root, books)
+            ),
+        ):
+            lib.add_root(str(self.root))
+            lib.wait_scan(30)
+        self.assertEqual(sizes, [2, 2, 2, 1])  # the last, short batch is written too
+        self.assertEqual(lib.summary()["books"], 7)
+        self.assertEqual(lib.scan_state["last"]["errors"], 1)
+        self.assertFalse(lib._db.in_transaction)
+        self.assertEqual(len(lib.search("kishi")["items"]), 1)  # search entries are in the batch
+
+    def test_cancelled_scan_writes_what_it_read(self):
+        lib = Library(self.dir / "c" / "lib.db", self.dir / "c" / "thumbs")
+        self.addCleanup(lib.close)
+        reads = []
+        real = lib._read_book
+
+        def read(f, st):
+            reads.append(f)
+            if len(reads) == 3:
+                lib._scan_cancel.set()
+            return real(f, st)
+
+        with mock.patch.object(lib, "_read_book", read):
+            lib.add_root(str(self.root))
+            lib.wait_scan(30)
+        self.assertTrue(lib.scan_state["last"]["cancelled"])
+        self.assertEqual(lib.summary()["books"] + lib.summary()["missing"], 3)
+        self.assertEqual(lib.summary()["missing"], 0)
+
+    def test_a_failed_batch_is_rolled_back(self):
+        b = self.book("Naruto v01")
+        self.lib.set_progress(b["id"], 1)
+        before = self.lib.summary()["books"]
+        new = [make_cbz(self.root / "New" / f"n{i}.cbz") for i in range(3)]
+        real = self.lib._write_book
+        calls = []
+
+        def write(root, book):
+            calls.append(book)
+            if len(calls) == 2:
+                raise RuntimeError("disk full")
+            return real(root, book)
+
+        root = self.lib.roots()[0]
+        books = [self.lib._read_book(f, f.stat()) for f in new]
+        with mock.patch.object(self.lib, "_write_book", write), self.assertRaises(RuntimeError):
+            self.lib._write_books(root, books)
+        self.assertFalse(self.lib._db.in_transaction)
+        self.assertEqual(self.lib.summary()["books"], before)  # the first book of the batch too
+        self.assertEqual(self.lib.book_detail(b["id"])["progress"]["page"], 1)
 
     def test_scan_file_for_one_new_book(self):
         new = make_cbz(self.root / "Naruto" / "Naruto v03.cbz")

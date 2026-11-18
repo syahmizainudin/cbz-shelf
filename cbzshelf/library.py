@@ -51,6 +51,7 @@ RESOURCE_MIME = {
     ".woff": "font/woff",
     ".woff2": "font/woff2",
 }
+SCAN_BATCH = 100  # books written per transaction while scanning
 SERIES_SETTINGS = {"mode": ("single", "double", "vertical"), "fit": ("width", "height", "original")}
 
 SCHEMA = """
@@ -346,23 +347,35 @@ class Library:
         }
         counts = {"added": 0, "updated": 0, "missing": 0, "errors": 0}
         seen: set[str] = set()
-        for f in sorted(files, key=natural_key):
-            if self._scan_cancel.is_set():
-                return counts  # don't mark anything missing after a partial walk
-            seen.add(str(f))
-            try:
-                st = f.stat()
-            except OSError:
-                continue
-            old = known.get(str(f))
-            if old and old["size"] == st.st_size and old["mtime"] == st.st_mtime and not old["missing"]:
+        # Files are read with no lock held; what they give is written SCAN_BATCH at a time, each
+        # batch in one transaction. Whatever is still pending is written on the way out, also when
+        # the scan is cancelled or stopped.
+        pending: list[dict] = []
+        try:
+            for f in sorted(files, key=natural_key):
+                if self._scan_cancel.is_set():
+                    return counts  # don't mark anything missing after a partial walk
+                seen.add(str(f))
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                old = known.get(str(f))
+                if old and old["size"] == st.st_size and old["mtime"] == st.st_mtime and not old["missing"]:
+                    self.scan_state["done"] += 1
+                    continue
+                book = self._read_book(f, st)
+                pending.append(book)
+                counts["added" if not old else "updated"] += 1
+                if book["error"]:
+                    counts["errors"] += 1
                 self.scan_state["done"] += 1
-                continue
-            result = self._index_file(root, f, st)
-            counts["added" if not old else "updated"] += 1
-            if result == "error":
-                counts["errors"] += 1
-            self.scan_state["done"] += 1
+                if len(pending) >= SCAN_BATCH:
+                    batch, pending = pending, []
+                    self._write_books(root, batch)
+        finally:
+            if pending:
+                self._write_books(root, pending)
         gone = [r["id"] for p, r in known.items() if p not in seen and not r["missing"]]
         if gone:
             with self._lock:
@@ -377,7 +390,7 @@ class Library:
         root = self.root_for(f)
         if not root or not f.is_file() or not f.name.lower().endswith(BOOK_EXTS):
             return False
-        self._index_file(root, f, f.stat())
+        self._write_books(root, [self._read_book(f, f.stat())])
         self._drop_empty_series()
         return True
 
@@ -401,7 +414,8 @@ class Library:
                     cover = ci_cover
         return len(pages), cover, file_meta, "cbz"
 
-    def _index_file(self, root: dict, f: Path, st: os.stat_result) -> str:
+    def _read_book(self, f: Path, st: os.stat_result) -> dict:
+        """Everything a book's row needs from its file. Reads the file only; no lock, no database."""
         error = None
         kind = "epub-text" if f.suffix.lower() == ".epub" else "cbz"
         try:
@@ -410,38 +424,65 @@ class Library:
             pages, cover, ci, error = 0, 0, {}, f"cannot read: {e}"
         file_meta = {**M.parse_filename(f.stem), **ci}
         file_meta.setdefault("title", f.stem)
-        series_id = self._series_for(root, f, ci.get("series"))
+        return {
+            "path": f,
+            "st": st,
+            "pages": pages,
+            "cover": cover,
+            "file_meta": file_meta,
+            "series": ci.get("series"),
+            "error": error,
+            "kind": kind,
+        }
+
+    def _write_books(self, root: dict, books: list[dict]) -> None:
+        """Add or update rows for books read by ``_read_book``, in one transaction.
+
+        The transaction holds ``_lock`` from BEGIN to COMMIT and covers only database writes: the
+        connection is shared, so another thread's write must never land inside it."""
         with self._lock:
-            row = self._db.execute("SELECT id, user_json FROM books WHERE path = ?", (str(f),)).fetchone()
-            user = json.loads(row["user_json"]) if row else {}
-            eff = M.effective(file_meta, user)
-            values = (
-                series_id,
-                st.st_size,
-                st.st_mtime,
-                pages,
-                cover,
-                json.dumps(file_meta),
-                json.dumps(eff),
-                _sort_key(eff, f.name),
-                error,
-                kind,
+            self._db.execute("BEGIN")
+            try:
+                for b in books:
+                    self._write_book(root, b)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def _write_book(self, root: dict, b: dict) -> None:
+        """One book's row and search entry. Call inside ``_write_books``' transaction."""
+        f, st, file_meta = b["path"], b["st"], b["file_meta"]
+        series_id = self._series_for(root, f, b["series"])
+        row = self._db.execute("SELECT id, user_json FROM books WHERE path = ?", (str(f),)).fetchone()
+        user = json.loads(row["user_json"]) if row else {}
+        eff = M.effective(file_meta, user)
+        values = (
+            series_id,
+            st.st_size,
+            st.st_mtime,
+            b["pages"],
+            b["cover"],
+            json.dumps(file_meta),
+            json.dumps(eff),
+            _sort_key(eff, f.name),
+            b["error"],
+            b["kind"],
+        )
+        if row:
+            book_id = row["id"]
+            self._db.execute(
+                """UPDATE books SET series_id=?, size=?, mtime=?, pages=?, cover=?, file_json=?, meta_json=?,
+                   sort_key=?, error=?, kind=?, missing=0 WHERE id=?""",
+                (*values, book_id),
             )
-            if row:
-                book_id = row["id"]
-                self._db.execute(
-                    """UPDATE books SET series_id=?, size=?, mtime=?, pages=?, cover=?, file_json=?, meta_json=?,
-                       sort_key=?, error=?, kind=?, missing=0 WHERE id=?""",
-                    (*values, book_id),
-                )
-            else:
-                book_id = self._db.execute(
-                    """INSERT INTO books(series_id, size, mtime, pages, cover, file_json, meta_json, sort_key, error,
-                       kind, root_id, path, added_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (*values, root["id"], str(f), time.time()),
-                ).lastrowid
-            self._reindex(book_id)
-        return "error" if error else "ok"
+        else:
+            book_id = self._db.execute(
+                """INSERT INTO books(series_id, size, mtime, pages, cover, file_json, meta_json, sort_key, error,
+                   kind, root_id, path, added_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (*values, root["id"], str(f), time.time()),
+            ).lastrowid
+        self._reindex(book_id)
 
     def _series_for(self, root: dict, f: Path, ci_series: str | None) -> int:
         folder = str(f.parent)
@@ -892,12 +933,20 @@ class Library:
                     user[key] = value
                 else:
                     raise ValueError(f"unknown series field: {key}")
-            self._db.execute("UPDATE series SET user_json = ? WHERE id = ?", (json.dumps(user), series_id))
-            if "name" in changes:
-                for b in self._db.execute(
-                    "SELECT id FROM books WHERE series_id = ?", (series_id,)
-                ).fetchall():
-                    self._reindex(b["id"])
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute(
+                    "UPDATE series SET user_json = ? WHERE id = ?", (json.dumps(user), series_id)
+                )
+                if "name" in changes:
+                    for b in self._db.execute(
+                        "SELECT id FROM books WHERE series_id = ?", (series_id,)
+                    ).fetchall():
+                        self._reindex(b["id"])
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
         return self.series_detail(series_id)
 
     def set_progress(
