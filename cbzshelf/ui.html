@@ -541,7 +541,7 @@ async function renderRoots() {
 $("rootList").onclick = async e => {
   const rs = e.target.closest("[data-rescan]"), rm = e.target.closest("[data-remove]");
   try {
-    if (rs) { await post("scan", { root_id: +rs.dataset.rescan }); say($("foldersMsg"), "Scanning…"); }
+    if (rs) { await post("scan", { root_id: +rs.dataset.rescan }); say($("foldersMsg"), "Scanning…"); poll(); }
     if (rm && confirm("Remove this folder from the library? Its books, your edits and reading progress are forgotten. Files on disk are not touched.")) {
       await post("remove-root", { id: +rm.dataset.remove }); await renderRoots(); loadFacets(); route();
     }
@@ -568,10 +568,11 @@ $("addRoot").onclick = async () => {
     const r = await post("add-root", { path: pickerCurrent?.path || $("pickerPath").value });
     store.set("lastDir", r.path);
     say($("foldersMsg"), `Added ${r.path}. Scanning…`);
+    poll();
     await renderRoots();
   } catch (e) { say($("foldersMsg"), e.message, true); }
 };
-$("scanAll").onclick = async () => { await post("scan", {}); say($("foldersMsg"), "Scanning all folders…"); };
+$("scanAll").onclick = async () => { await post("scan", {}); say($("foldersMsg"), "Scanning all folders…"); poll(); };
 $("cancelScan").onclick = () => post("cancel-scan", {});
 $("removeMissing").onclick = async () => {
   if (!confirm("Forget every book whose file is missing, with your edits and progress for it?")) return;
@@ -592,13 +593,34 @@ function applyCan(next) {
 }
 
 /* ------------------------------------------------------------------ status polling */
-let lastScanDone = null;
-async function poll() {
+// One setTimeout chain, never two requests at once: every 1.5 s while a scan runs, else every 5 s.
+// Nothing is fetched while nobody can see the counts: the tab is hidden, the reader is open, or
+// the page is in harbor's frame on a tab that isn't showing (the frame element then has no box;
+// document.hidden stays false and the frame keeps its size).
+let lastScanDone = null, pollTimer = null, polling = false, pollAgain = false, scanRunning = false;
+function frameHidden() {
+  try { const fe = window.frameElement; return !!fe && !fe.getClientRects().length; } catch { return false; }
+}
+const unseen = () => document.hidden || !$("reader").hidden || frameHidden();
+function schedulePoll(ms) { clearTimeout(pollTimer); pollTimer = setTimeout(poll, ms); }
+async function poll(force = false) {
+  clearTimeout(pollTimer);
+  if (polling) { pollAgain = true; return; }
+  if (!force && unseen()) return schedulePoll(1500);  // only a check, no request
+  polling = true;
+  try { await pollState(); } finally {
+    polling = false;
+    if (pollAgain) { pollAgain = false; schedulePoll(0); } else schedulePoll(scanRunning ? 1500 : 5000);
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+async function pollState() {
   try {
     const st = await fetch("/api/state").then(r => { if (signedOut(r)) throw new Error("signed out"); return r.json(); });
     applyCan(st.library_can);
     if (st.library_prefs) serverText = st.library_prefs;
     const L = st.library, scan = L.scan;
+    scanRunning = scan.running;
     $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
     $("scanChip").hidden = !scan.running;
     $("cancelScan").hidden = !scan.running;
@@ -611,7 +633,6 @@ async function poll() {
     lastScanDone = doneAt;
   } catch {}
 }
-setInterval(poll, 1500);
 
 /* ------------------------------------------------------------------ reader */
 const R = { book: null, series: null, page: 0, mode: "single", rtl: false, fit: "height", saveTimer: null, observer: null,
@@ -991,7 +1012,7 @@ $("tToc").onchange = () => {
 
 /* ------------------------------------------------------------------ start */
 // Permissions first, so the first view doesn't show buttons this user can't use.
-poll().finally(() => { loadFacets(); route(); });
+poll(true).finally(() => { loadFacets(); route(); });
 </script>
 </body>
 </html>
