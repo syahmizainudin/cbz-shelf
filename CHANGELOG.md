@@ -4,6 +4,8 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.4.2
+
 - Faster scans: books are written 100 at a time, each batch in one transaction, instead of three or four commits per book. Files are still read with no lock held.
 - Migration 5 adds two indexes (`books(missing, root_id)`, `books(series_id, missing, sort_key)`) for the counts `/api/state` reports and for series covers. It adds nothing else.
 - A text EPUB stops being read for classification once it is known to be a text book.
