@@ -9,7 +9,7 @@ description = "A library and reader for .cbz comics and EPUB books: scan folders
 readme = "README.md"
 requires-python = ">=3.10"
 # cbz-webp provides the console server, natural sorting, path handling and Pillow.
-dependencies = ["cbz-webp @ git+https://github.com/syahmizainudin/cbz-webp@v0.4.1"]
+dependencies = ["cbz-webp @ git+https://github.com/syahmizainudin/cbz-webp@v0.4.2"]
 
 [project.scripts]
 cbz-shelf = "cbzshelf.cli:main"

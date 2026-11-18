@@ -4,6 +4,10 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.4.3
+
+- Pins cbz-webp 0.4.2.
+
 ## 0.4.2
 
 - Faster scans: books are written 100 at a time, each batch in one transaction, instead of three or four commits per book. Files are still read with no lock held.
