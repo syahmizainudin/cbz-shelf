@@ -119,6 +119,10 @@ MIGRATIONS = [
            PRIMARY KEY (user_id, series_id))""",
     # 4 (0.4.1): each user's own text reader settings (size, line width, colours).
     """CREATE TABLE user_prefs (user_id INTEGER PRIMARY KEY, prefs_json TEXT NOT NULL DEFAULT '{}')""",
+    # 5 (next): indexes only. Counting books by missing (summary, roots), and each series' first
+    # book in order (series covers).
+    """CREATE INDEX books_missing_root ON books(missing, root_id);
+       CREATE INDEX books_series_missing_sort ON books(series_id, missing, sort_key)""",
 ]
 # The text reader's settings: name -> check. None as a value removes a setting.
 TEXT_PREFS = {
@@ -255,8 +259,12 @@ class Library:
             self._db.execute("COMMIT")
         return bool(n)
 
+    def _root_paths(self) -> list[dict]:
+        """Every folder's id and path, without the book counts ``roots()`` adds."""
+        return [dict(r) for r in self._q("SELECT id, path FROM roots ORDER BY path")]
+
     def root_for(self, path: Path) -> dict | None:
-        for r in self.roots():
+        for r in self._root_paths():
             if path.is_relative_to(r["path"]):
                 return r
         return None
@@ -307,7 +315,7 @@ class Library:
                 self.scan_state.update(running=True, done=0, total=0)
             self._scan_cancel.clear()
             try:
-                roots = self.roots() if target is None else [r for r in self.roots() if r["id"] == target]
+                roots = [r for r in self._root_paths() if target is None or r["id"] == target]
                 totals = {"added": 0, "updated": 0, "missing": 0, "errors": 0}
                 for r in roots:
                     if self._scan_cancel.is_set():

@@ -286,6 +286,36 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual((b["title"], b["kind"]), ("Mine", "cbz"))
             self.assertEqual((b["progress"]["page"], b["progress"]["pos"]), (2, 0))  # kept, as user 0's
             self.assertEqual(lib._q("PRAGMA user_version")[0][0], len(L.MIGRATIONS))
+            indexes = {r["name"] for r in lib._q("PRAGMA index_list(books)")}
+            self.assertLessEqual({"books_missing_root", "books_series_missing_sort"}, indexes)
+
+    def test_0_4_database_gets_the_indexes_and_keeps_data(self):
+        from cbzshelf import library as L
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            db = tmp / "old.db"
+            make_cbz(tmp / "C" / "S" / "a.cbz", n_pages=4)
+            saved, L.MIGRATIONS = L.MIGRATIONS, L.MIGRATIONS[:4]  # a 0.4.1 database
+            try:
+                lib = Library(db, tmp / "thumbs")
+                lib.add_root(str(tmp / "C"))
+                lib.wait_scan(30)
+                bid = lib.search()["items"][0]["id"]
+                lib.edit_book(bid, {"title": "Mine"})
+                lib.set_progress(bid, 2, user=3)
+                lib.close()
+            finally:
+                L.MIGRATIONS = saved
+            self.assertEqual(sqlite3.connect(db).execute("PRAGMA user_version").fetchone()[0], 4)
+
+            lib = Library(db, tmp / "thumbs")
+            self.addCleanup(lib.close)
+            self.assertEqual(lib._q("PRAGMA user_version")[0][0], len(L.MIGRATIONS))
+            indexes = {r["name"] for r in lib._q("PRAGMA index_list(books)")}
+            self.assertLessEqual({"books_missing_root", "books_series_missing_sort"}, indexes)
+            b = lib.book_detail(bid, user=3)
+            self.assertEqual((b["title"], b["progress"]["page"]), ("Mine", 2))
 
 
 if __name__ == "__main__":
