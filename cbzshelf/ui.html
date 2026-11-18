@@ -335,14 +335,8 @@ async function showHome(append = false) {
       home ? get("series", { favourite: 1, limit: 30 }) : null,
       home ? get("search", { favourite: 1, limit: 30 }) : null,
     ]);
-    let html = "";
-    if (cont && cont.length) {
-      html += `<h2>Continue reading <button class="link" data-act="clearContinue" title="Empty this row. Your pages are kept.">Clear all</button></h2>
-        <div class="row-scroll">${cont.map(b => bookCard(b, `${isText(b) ? "chapter" : "page"} ${b.progress.page + 1} of ${b.pages}`, true)).join("")}</div>`;
-    }
-    if (favSeries && (favSeries.items.length || favBooks.items.length)) {
-      html += `<h2>Favourites</h2><div class="row-scroll">${favSeries.items.map(seriesCard).join("")}${favBooks.items.map(b => bookCard(b)).join("")}</div>`;
-    }
+    // Home's two rows sit in their own boxes, so a star or × can redraw just that row.
+    let html = home ? `<div id="contRow">${contRowHtml(cont)}</div><div id="favRow">${favRowHtml(favSeries, favBooks)}</div>` : "";
     if (filtering() && (f.q || f.favourite) && !append) {
       const books = await get("search", { ...f, limit: 60 });
       html += `<h2>Books <span class="chip">${books.total}</span></h2>` +
@@ -361,6 +355,24 @@ async function showHome(append = false) {
     seriesOffset += series.items.length;
     $("moreWrap").innerHTML = seriesOffset < series.total ? `<button data-act="more">Show more (${series.total - seriesOffset} left)</button>` : "";
   } catch (e) { $("view").innerHTML = `<div class="empty">Couldn't load the library: ${esc(e.message)}</div>`; }
+}
+
+function contRowHtml(cont) {
+  return cont.length ? `<h2>Continue reading <button class="link" data-act="clearContinue" title="Empty this row. Your pages are kept.">Clear all</button></h2>
+    <div class="row-scroll">${cont.map(b => bookCard(b, `${isText(b) ? "chapter" : "page"} ${b.progress.page + 1} of ${b.pages}`, true)).join("")}</div>` : "";
+}
+function favRowHtml(favSeries, favBooks) {
+  return favSeries.items.length || favBooks.items.length
+    ? `<h2>Favourites</h2><div class="row-scroll">${favSeries.items.map(seriesCard).join("")}${favBooks.items.map(b => bookCard(b)).join("")}</div>` : "";
+}
+// Redraw one of home's rows in place, keeping the rest of the page, its "Show more" pages and the scroll.
+async function refreshRow(which) {
+  const box = $(which === "cont" ? "contRow" : "favRow");
+  if (!box || location.hash) return;
+  try {
+    box.innerHTML = which === "cont" ? contRowHtml(await get("continue"))
+      : favRowHtml(...await Promise.all([get("series", { favourite: 1, limit: 30 }), get("search", { favourite: 1, limit: 30 })]));
+  } catch (e) { alert(e.message); }
 }
 
 async function showSeries(id) {
@@ -395,7 +407,7 @@ const actions = {
   clearContinue: async () => {
     if (!confirm("Empty Continue reading? Your pages are kept, and a book comes back when you read it again.")) return;
     await post("clear-continue", {}).catch(e => alert(e.message));
-    showHome();
+    refreshRow("cont");
   },
   editSeries: () => openSeriesEdit(),
 };
@@ -429,11 +441,11 @@ async function toggleFavourite(btn) {
     else b.textContent = on ? "★ Favourite" : "☆ Favourite";
     b.title = on ? "Remove from favourites" : "Add to favourites";
   }
-  if (!location.hash) showHome();
+  refreshRow("fav");
 }
 async function hideContinue(id) {
   try { await post("hide-continue", { id }); } catch (e) { return alert(e.message); }
-  showHome();
+  refreshRow("cont");
 }
 
 async function loadFacets() {
