@@ -4,6 +4,10 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.5.1
+
+- Pins cbz-webp 0.5.0 (the console can be reached from other devices when a host such as harbor asks; nothing changes standalone).
+
 ## 0.5.0
 
 - **Libraries as tabs:** split the library into named libraries (Manga, Novels…), each holding one or more folders. They show as tabs above the filters, next to **All**, and a tab limits series, search, filters, Continue reading and Favourites to that library. **Libraries…** adds, renames, reorders and removes them, and **Folders** moves a folder to another library (keeping its books, edits and progress) and adds new folders to the library you pick. Migration 6 puts every existing folder in one library called "Library", so nothing changes until you add another. `cbz-shelf add --library NAME`, `cbz-shelf libraries`.
