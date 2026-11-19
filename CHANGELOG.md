@@ -4,6 +4,9 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+- **OPDS catalog** at `/api/library/opds` for reader apps (Panels, Chunky, KOReader): browse all series or one library, search, stream comic and picture-EPUB pages (OPDS Page Streaming), and download any book whole. New action `file?book=` streams the file, with resume (`Range`). Both obey `visible`.
+- **Folder paths only for managers:** `series` and `series-detail` leave out the series' folder unless the user has `library.manage`, so readers don't see where books are kept on the server.
+
 ## 0.5.1
 
 - Pins cbz-webp 0.5.0 (the console can be reached from other devices when a host such as harbor asks; nothing changes standalone).

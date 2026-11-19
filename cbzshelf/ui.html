@@ -432,7 +432,7 @@ async function showSeries(id) {
         ${first && s.books.length > 1 ? `<div class="cover"><img src="${thumb(first)}" alt=""></div>` : ""}
         <div class="info">
           <h2>${esc(s.name)}</h2>
-          <div class="muted">${s.books.length} book${s.books.length === 1 ? "" : "s"} · ${esc(s.folder)}</div>
+          <div class="muted">${s.books.length} book${s.books.length === 1 ? "" : "s"}${s.folder ? ` · ${esc(s.folder)}` : ""}</div>
           ${s.authors.length ? `<div class="tags">${s.authors.map(a => `<button data-author="${esc(a)}">${esc(a)}</button>`).join("")}</div>` : ""}
           ${s.tags.length ? `<div class="tags">${s.tags.map(t => `<button data-tag="${esc(t)}">#${esc(t)}</button>`).join("")}</div>` : ""}
           ${s.summary ? `<p>${esc(s.summary)}</p>` : ""}
@@ -568,7 +568,7 @@ function openSeriesEdit() {
   $("s-authors").value = list(s.user.authors); $("s-authors").placeholder = list(s.authors);
   $("s-tags").value = list(s.user.tags); $("s-tags").placeholder = list(s.tags);
   $("s-summary").value = s.user.summary || "";
-  $("seriesFolder").textContent = s.folder;
+  $("seriesFolder").textContent = s.folder || "";
   say($("seriesMsg"), "");
   $("seriesDlg").showModal();
 }

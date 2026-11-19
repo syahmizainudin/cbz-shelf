@@ -1106,6 +1106,12 @@ class Library:
             raise FileNotFoundError("the file for this book is missing")
         return r
 
+    def book_file(self, book_id: int) -> tuple[Path, str]:
+        """A book's file and kind, looked up by id (for downloading it whole). Raises KeyError for
+        an unknown id and FileNotFoundError for a missing file."""
+        r = self._book_file(book_id)
+        return Path(r["path"]), r["kind"]
+
     def _cached(self, cache: OrderedDict, key, size: int, make):
         """``cache[key]``, made with ``make()`` (outside the lock) if missing; keeps ``size`` entries."""
         with self._lock:

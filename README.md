@@ -104,6 +104,12 @@ Your chapter and how far down it you are are saved as you read. Text settings ar
 
 Chapters are shown in a frame that runs no scripts, and the server sends them with a Content-Security-Policy that blocks scripts, forms and anything from outside, so a book can't run code or contact other sites.
 
+## Reader apps (OPDS)
+
+The library is also an [OPDS](https://opds.io/) catalog at `/api/library/opds`. Reader apps such as Panels, Chunky and KOReader can browse it by library and series, search it, stream comic and picture-EPUB pages without downloading, and download any book for offline reading. Add `http://127.0.0.1:8767/api/library/opds` as a catalog in an app on this computer. To read on a phone, use [harbor](https://github.com/syahmizainudin/harbor), which adds sign-in and HTTPS.
+
+Reading progress in a reader app stays in that app; it isn't synced with the library page.
+
 ## Using it inside another tool
 
 `cbzshelf.web.LibraryAPI(library, user_of=, can=, visible=)` is the library as an API for [cbz-webp's console server](https://github.com/syahmizainudin/cbz-webp#using-the-console-in-another-tool), mounted at `/api/library/`, and `cbzshelf.web.UI_HTML` is the page. [harbor](https://github.com/syahmizainudin/harbor) uses them for its Library tab.

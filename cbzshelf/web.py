@@ -7,9 +7,10 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
 
-from cbzwebp.web import serve
+from cbzwebp.web import FileBody, serve
 
 from .library import BOOK_EXTS, Library
+from .opds import BOOK_MIME, Catalog
 
 UI_HTML = (Path(__file__).parent / "ui.html").read_bytes()
 PREFIX = "/api/library/"
@@ -73,6 +74,7 @@ GET_ITEM = {
     "thumb": ("book", "book"),
     "chapter": ("book", "book"),
     "res": ("book", "book"),
+    "file": ("book", "book"),
 }
 POST_ITEM = {
     "edit-book": ("book", "id"),
@@ -99,6 +101,7 @@ class LibraryAPI:
         self.user_of = user_of or (lambda: 0)
         self.can = can or (lambda permission: True)
         self.visible = visible or (lambda: None)
+        self.catalog = Catalog(library, PREFIX)
 
     def _visible(self):
         v = self.visible()
@@ -110,6 +113,12 @@ class LibraryAPI:
             return visible
         lid = int(raw)
         return frozenset({lid}) if visible is None or lid in visible else frozenset()
+
+    def _hide_path(self, series: dict) -> dict:
+        """A series' folder is a path on the server: only for those who manage the library."""
+        if not self.can(MANAGE):
+            series.pop("folder", None)
+        return series
 
     def _check(self, table: dict, action: str, data: dict, visible) -> None:
         kind_field = table.get(action)
@@ -144,13 +153,25 @@ class LibraryAPI:
         try:
             self._check(GET_ITEM, action, query, visible)
             if action == "series":
-                return _json(
-                    lib.series_list(
-                        **filters, **mine, sort=query.get("sort", "name"), limit=limit, offset=offset
-                    )
+                found = lib.series_list(
+                    **filters, **mine, sort=query.get("sort", "name"), limit=limit, offset=offset
                 )
+                for item in found["items"]:
+                    self._hide_path(item)
+                return _json(found)
             if action == "series-detail":
-                return _json(lib.series_detail(_int(query, "id"), user=user))
+                return _json(self._hide_path(lib.series_detail(_int(query, "id"), user=user)))
+            if action == "opds":
+                body, ctype = self.catalog.answer(query, visible)
+                return 200, {"Content-Type": ctype}, body
+            if action == "file":
+                path, kind = lib.book_file(_int(query, "book"))
+                headers = {
+                    "Content-Type": BOOK_MIME.get(kind, "application/zip"),
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{quote(path.name, safe='')}",
+                    "Cache-Control": FILE_CACHE if query.get("v") else "no-store",
+                }
+                return 200, headers, FileBody(path)
             if action == "book":
                 return _json(lib.book_detail(_int(query, "id"), user=user))
             if action == "search":
