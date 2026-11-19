@@ -24,9 +24,10 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 | Command | What it does |
 |---|---|
 | `cbz-shelf ui [-p 8767] [--open] [--no-scan]` | Starts the library and reader. Rescans all folders in the background when it starts, unless you pass `--no-scan` |
-| `cbz-shelf add <folder>` | Adds a folder and scans it |
+| `cbz-shelf add <folder> [--library NAME]` | Adds a folder and scans it. `--library` puts it in that library, making the library if needed |
 | `cbz-shelf scan [<folder>]` | Rescans every library folder, or one, for new, changed and missing books |
-| `cbz-shelf roots` | Lists the library's folders |
+| `cbz-shelf roots` | Lists the library's folders and the library each is in |
+| `cbz-shelf libraries` | Lists the libraries, with their folders and books |
 | `cbz-shelf search <words>` | Searches titles, series, authors, tags and summaries |
 
 `--db PATH` (or `$CBZ_SHELF_DB`) picks the database. The default is `~/.local/share/cbz-shelf/library.db`. Covers are cached in `~/.cache/cbz-shelf/thumbs` and can be deleted at any time; they are rebuilt as needed. Windows paths such as `D:\Comics` work in WSL.
@@ -74,6 +75,7 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 - **Continue reading:** the × on a card takes it out of the row, and **Clear all** empties the row. Your page is kept, and a book comes back as soon as you read it again.
 - **A series** shows its books, with progress bars and a Read or Continue button.
 - **Folders** adds library folders with a folder browser, and rescans or removes them.
+- **Libraries:** split the library into named libraries, such as Manga and Novels. Each one holds one or more folders and becomes a tab above the filters, next to **All**. On a library's tab, the series, search, filters, Continue reading and Favourites show only that library. **Libraries…** adds, renames, reorders and removes libraries. In **Folders**, each folder has a menu to move it to another library, and new folders go into the library you choose. Moving a folder keeps its books, edits and progress. A library is removed only once it has no folders, and the last one stays. With a single library, there are no tabs.
 
 ## The reader
 
@@ -104,7 +106,9 @@ Chapters are shown in a frame that runs no scripts, and the server sends them wi
 
 ## Using it inside another tool
 
-`cbzshelf.web.LibraryAPI(library)` is the library as an API for [cbz-webp's console server](https://github.com/syahmizainudin/cbz-webp#using-the-console-in-another-tool), mounted at `/api/library/`, and `cbzshelf.web.UI_HTML` is the page. [harbor](https://github.com/syahmizainudin/harbor) uses them for its Library tab.
+`cbzshelf.web.LibraryAPI(library, user_of=, can=, visible=)` is the library as an API for [cbz-webp's console server](https://github.com/syahmizainudin/cbz-webp#using-the-console-in-another-tool), mounted at `/api/library/`, and `cbzshelf.web.UI_HTML` is the page. [harbor](https://github.com/syahmizainudin/harbor) uses them for its Library tab.
+
+A host with accounts passes `user_of()` (whose progress and favourites), `can(permission)` (`library.read`, `library.edit`, `library.manage`) and `visible()`, the ids of the libraries the request may see (None for all). Books and series in other libraries are left out of every list and count, and answer 404 by id.
 
 When the page runs in a frame, the reader posts `{type: "shelf-reader", open: true}` to the parent page (same origin only) when a book opens, and `open: false` when it closes, so the host can give the reader the whole window.
 

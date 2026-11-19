@@ -56,28 +56,77 @@ POST_NEEDS = {
     "scan": MANAGE,
     "cancel-scan": MANAGE,
     "remove-missing": MANAGE,
+    "add-library": MANAGE,
+    "rename-library": MANAGE,
+    "order-libraries": MANAGE,
+    "remove-library": MANAGE,
+    "move-root": MANAGE,
 }
 GET_NEEDS = {"roots": MANAGE}
 DENIED = {"error": "you don't have permission for this"}
+# Actions that name one book or series, and where its id is: (kind, field). A book or series in a
+# library the user can't see answers 404, as if it didn't exist.
+GET_ITEM = {
+    "series-detail": ("series", "id"),
+    "book": ("book", "id"),
+    "page": ("book", "book"),
+    "thumb": ("book", "book"),
+    "chapter": ("book", "book"),
+    "res": ("book", "book"),
+}
+POST_ITEM = {
+    "edit-book": ("book", "id"),
+    "edit-series": ("series", "id"),
+    "progress": ("book", "id"),
+    "clear-progress": ("book", "id"),
+    "reader-settings": ("series", "id"),
+    "hide-continue": ("book", "id"),
+}
 
 
 class LibraryAPI:
     """The library's endpoints. ``user_of()`` names the user each request acts for: reading
     progress, Continue reading, favourites and reader settings are kept per user. Without accounts
     it is user 0. ``can(permission)`` says whether that user may read (``library.read``), edit
-    details (``library.edit``) or manage folders and scans (``library.manage``)."""
+    details (``library.edit``) or manage folders and scans (``library.manage``).
 
-    def __init__(self, library: Library, user_of=None, can=None):
+    ``visible()`` gives the ids of the libraries the request's user may see, or None for all.
+    Everything else (lists, counts, books and series by id, pages) is limited to those; a book or
+    series outside them answers 404. Managing folders and libraries isn't limited by it."""
+
+    def __init__(self, library: Library, user_of=None, can=None, visible=None):
         self.lib = library
         self.user_of = user_of or (lambda: 0)
         self.can = can or (lambda permission: True)
+        self.visible = visible or (lambda: None)
+
+    def _visible(self):
+        v = self.visible()
+        return None if v is None else frozenset(int(i) for i in v)
+
+    def _scope(self, visible, raw) -> frozenset | None:
+        """The libraries a list covers: the visible ones, or just ``raw`` (a library id) if given."""
+        if raw in (None, ""):
+            return visible
+        lid = int(raw)
+        return frozenset({lid}) if visible is None or lid in visible else frozenset()
+
+    def _check(self, table: dict, action: str, data: dict, visible) -> None:
+        kind_field = table.get(action)
+        if kind_field and visible is not None and kind_field[1] in data:
+            self.lib.check_visible(kind_field[0], int(data[kind_field[1]]), visible)
 
     def state(self) -> dict:
         if not self.can(READ):
             return {}
+        visible, manage = self._visible(), self.can(MANAGE)
+        summary = self.lib.summary(visible)
+        if not manage:  # the folder being scanned is a path; only managers see paths
+            summary["scan"] = {k: v for k, v in summary["scan"].items() if k != "root"}
         return {
-            "library": self.lib.summary(),
-            "library_can": {"edit": self.can(EDIT), "manage": self.can(MANAGE)},
+            "library": summary,
+            "library_list": self.lib.libraries(visible),
+            "library_can": {"edit": self.can(EDIT), "manage": manage},
             "library_prefs": self.lib.user_prefs(int(self.user_of())),
         }
 
@@ -89,8 +138,11 @@ class LibraryAPI:
         if not self.can(GET_NEEDS.get(action, READ)):
             return _json(DENIED, 403)
         user = int(self.user_of())
-        mine = {"favourite": _flag(query, "favourite"), "user": user}
+        visible = self._visible()
+        scope = self._scope(visible, query.get("library"))
+        mine = {"favourite": _flag(query, "favourite"), "user": user, "libraries": scope}
         try:
+            self._check(GET_ITEM, action, query, visible)
             if action == "series":
                 return _json(
                     lib.series_list(
@@ -104,9 +156,11 @@ class LibraryAPI:
             if action == "search":
                 return _json(lib.search(**filters, **mine, limit=limit, offset=offset))
             if action == "continue":
-                return _json(lib.continue_reading(min(limit, 30), user=user))
+                return _json(lib.continue_reading(min(limit, 30), user=user, libraries=scope))
             if action == "facets":
-                return _json(lib.facets())
+                return _json(lib.facets(libraries=scope))
+            if action == "libraries":
+                return _json(lib.libraries(visible))
             if action == "roots":
                 return _json(lib.roots())
             if action in ("chapter", "res"):
@@ -147,9 +201,21 @@ class LibraryAPI:
         if not self.can(POST_NEEDS.get(action, READ)):
             return 403, DENIED
         user = int(self.user_of())
+        visible = self._visible()
         try:
+            self._check(POST_ITEM, action, body, visible)
             if action == "add-root":
-                return 200, lib.add_root(str(body.get("path", "")))
+                return 200, lib.add_root(str(body.get("path", "")), body.get("library_id"))
+            if action == "move-root":
+                return 200, lib.move_root(int(body["id"]), int(body["library_id"]))
+            if action == "add-library":
+                return 200, lib.add_library(str(body.get("name", "")))
+            if action == "rename-library":
+                return 200, lib.rename_library(int(body["id"]), str(body.get("name", "")))
+            if action == "order-libraries":
+                return 200, {"libraries": lib.order_libraries(body.get("order"))}
+            if action == "remove-library":
+                return 200, {"ok": lib.remove_library(int(body["id"]))}
             if action == "remove-root":
                 return 200, {"ok": lib.remove_root(int(body["id"]))}
             if action == "scan":
@@ -182,6 +248,7 @@ class LibraryAPI:
                 kind, on = str(body.get("kind", "")), body.get("on", True)
                 if not isinstance(on, bool):
                     raise ValueError("on must be true or false")
+                lib.check_visible(kind, int(body["id"]), visible)
                 return 200, {"favourite": lib.set_favourite(kind, int(body["id"]), on, user=user)}
             if action == "prefs":
                 return 200, lib.set_user_prefs(body.get("changes") or {}, user=user)
@@ -190,7 +257,8 @@ class LibraryAPI:
             if action == "hide-continue":
                 return 200, {"hidden": lib.hide_continue(int(body["id"]), user=user)}
             if action == "clear-continue":
-                return 200, {"hidden": lib.hide_continue(None, user=user)}
+                scope = self._scope(visible, body.get("library"))
+                return 200, {"hidden": lib.hide_continue(None, user=user, libraries=scope)}
         except KeyError as e:
             if not str(e).startswith(("'no ", '"no ')):
                 raise  # a missing field: the server answers 400

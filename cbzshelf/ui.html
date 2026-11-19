@@ -37,6 +37,11 @@
   button:hover { filter: brightness(.96); }
   .chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
   .chip b { color: var(--text); }
+  .libtabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .libtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; color: var(--muted); }
+  .libtabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .libtabs .link { margin-left: auto; color: var(--accent); }
+  .libs li input[type=text] { flex: 1; min-width: 140px; }
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
   h2 { font-size: 15px; margin: 18px 0 10px; display: flex; align-items: center; gap: 10px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px 14px; }
@@ -143,6 +148,8 @@
     <button id="openFolders">Folders</button>
   </header>
 
+  <nav class="libtabs" id="libTabs" role="tablist" aria-label="Libraries" hidden></nav>
+
   <div class="filters">
     <select id="tagFilter" aria-label="Filter by tag"><option value="">All tags</option></select>
     <select id="authorFilter" aria-label="Filter by author"><option value="">All authors</option></select>
@@ -201,7 +208,7 @@
 
 <!-- folders -->
 <dialog id="foldersDlg">
-  <div class="dlg-head"><strong>Library folders</strong><button class="link" data-close>Close</button></div>
+  <div class="dlg-head"><strong>Library folders</strong><span><button id="openLibraries">Libraries…</button> <button class="link" data-close>Close</button></span></div>
   <div class="dlg-body">
     <ul class="roots" id="rootList"></ul>
     <div><strong>Add a folder</strong> <span class="muted">— every .cbz/.zip/.epub inside it, including subfolders, is added. Each folder of archives becomes a series.</span></div>
@@ -212,7 +219,18 @@
   </div>
   <div class="dlg-foot">
     <span><button id="scanAll">Rescan all</button> <button class="link" id="cancelScan" hidden>Stop scan</button></span>
-    <span><button class="danger" id="removeMissing">Forget missing books</button> <button class="primary" id="addRoot">Add this folder</button></span>
+    <span><button class="danger" id="removeMissing">Forget missing books</button> <label class="muted" id="addToWrap">to <select id="addTo" aria-label="Add to library"></select></label> <button class="primary" id="addRoot">Add this folder</button></span>
+  </div>
+</dialog>
+
+<!-- libraries -->
+<dialog id="librariesDlg">
+  <div class="dlg-head"><strong>Libraries</strong><button class="link" data-close>Close</button></div>
+  <div class="dlg-body">
+    <div class="muted">Each library is a tab on the library page, holding one or more folders. Choose a folder's library in <b>Folders</b>.</div>
+    <ul class="roots libs" id="libList"></ul>
+    <form class="actions" id="libAddForm"><input type="text" id="libNew" placeholder="New library name" maxlength="60" style="flex:1;min-width:0"><button class="primary">Add library</button></form>
+    <div class="msg" id="libMsg"></div>
   </div>
 </dialog>
 
@@ -319,6 +337,34 @@ $("view").addEventListener("click", e => {
 
 /* ------------------------------------------------------------------ views */
 let seriesOffset = 0, current = { series: null };
+/* ------------------------------------------------------------------ library tabs */
+// The libraries this user can see, in tab order, and the open tab ("" = All).
+let libs = [], curLib = store.get("library", "");
+const inLib = (o = {}) => (curLib ? { ...o, library: curLib } : o);
+function renderLibTabs() {
+  const bar = $("libTabs");
+  bar.hidden = libs.length < 2 && !(can.manage && libs.length);
+  const tab = (id, name) => `<button role="tab" data-lib="${id}" aria-selected="${String(curLib) === String(id)}">${esc(name)}</button>`;
+  bar.innerHTML = (libs.length > 1 ? tab("", "All") + libs.map(l => tab(l.id, l.name)).join("") : "") +
+    (can.manage ? `<button class="link" data-act="manageLibs" title="Add, rename or reorder libraries">Libraries…</button>` : "");
+}
+function setLibs(list) {
+  if (!Array.isArray(list)) return;
+  const key = l => JSON.stringify(l.map(x => [x.id, x.name]));
+  const same = key(list) === key(libs);
+  libs = list;
+  if (curLib && !libs.some(l => String(l.id) === String(curLib))) { curLib = ""; store.set("library", ""); if (!location.hash) { loadFacets(); route(); } }
+  if (!same) renderLibTabs();
+}
+$("libTabs").onclick = e => {
+  const act = e.target.closest("[data-act]");
+  if (act) return actions[act.dataset.act]?.(act);
+  const b = e.target.closest("[data-lib]");
+  if (!b) return;
+  curLib = b.dataset.lib; store.set("library", curLib);
+  renderLibTabs(); loadFacets(); poll(true);
+  if (location.hash) location.hash = ""; else showHome();
+};
 const filters = () => ({ q: $("q").value.trim(), tag: $("tagFilter").value, author: $("authorFilter").value,
                          favourite: $("favFilter").getAttribute("aria-pressed") === "true" ? 1 : "" });
 function filtering() { const f = filters(); return !!(f.q || f.tag || f.author || f.favourite); }
@@ -330,15 +376,15 @@ async function showHome(append = false) {
   try {
     const home = !append && !filtering();
     const [series, cont, favSeries, favBooks] = await Promise.all([
-      get("series", { ...f, sort: $("sort").value, limit: 60, offset: seriesOffset }),
-      home ? get("continue") : null,
-      home ? get("series", { favourite: 1, limit: 30 }) : null,
-      home ? get("search", { favourite: 1, limit: 30 }) : null,
+      get("series", inLib({ ...f, sort: $("sort").value, limit: 60, offset: seriesOffset })),
+      home ? get("continue", inLib()) : null,
+      home ? get("series", inLib({ favourite: 1, limit: 30 })) : null,
+      home ? get("search", inLib({ favourite: 1, limit: 30 })) : null,
     ]);
     // Home's two rows sit in their own boxes, so a star or × can redraw just that row.
     let html = home ? `<div id="contRow">${contRowHtml(cont)}</div><div id="favRow">${favRowHtml(favSeries, favBooks)}</div>` : "";
     if (filtering() && (f.q || f.favourite) && !append) {
-      const books = await get("search", { ...f, limit: 60 });
+      const books = await get("search", inLib({ ...f, limit: 60 }));
       html += `<h2>Books <span class="chip">${books.total}</span></h2>` +
         (books.items.length ? `<div class="grid">${books.items.map(b => bookCard(b)).join("")}</div>` : `<div class="empty">No books match.</div>`);
     }
@@ -370,8 +416,8 @@ async function refreshRow(which) {
   const box = $(which === "cont" ? "contRow" : "favRow");
   if (!box || location.hash) return;
   try {
-    box.innerHTML = which === "cont" ? contRowHtml(await get("continue"))
-      : favRowHtml(...await Promise.all([get("series", { favourite: 1, limit: 30 }), get("search", { favourite: 1, limit: 30 })]));
+    box.innerHTML = which === "cont" ? contRowHtml(await get("continue", inLib()))
+      : favRowHtml(...await Promise.all([get("series", inLib({ favourite: 1, limit: 30 })), get("search", inLib({ favourite: 1, limit: 30 }))]));
   } catch (e) { alert(e.message); }
 }
 
@@ -406,10 +452,11 @@ const actions = {
   more: () => showHome(true),
   clearContinue: async () => {
     if (!confirm("Empty Continue reading? Your pages are kept, and a book comes back when you read it again.")) return;
-    await post("clear-continue", {}).catch(e => alert(e.message));
+    await post("clear-continue", inLib()).catch(e => alert(e.message));
     refreshRow("cont");
   },
   editSeries: () => openSeriesEdit(),
+  manageLibs: () => openLibraries(),
 };
 function route() {
   const m = location.hash.match(/^#series\/(\d+)/);
@@ -450,7 +497,7 @@ async function hideContinue(id) {
 
 async function loadFacets() {
   try {
-    const f = await get("facets");
+    const f = await get("facets", inLib());
     for (const [sel, items, label] of [["tagFilter", f.tags, "All tags"], ["authorFilter", f.authors, "All authors"]]) {
       const keep = $(sel).value;
       $(sel).innerHTML = `<option value="">${label}</option>` + items.map(i => `<option value="${esc(i.value)}">${esc(i.value)} (${i.n})</option>`).join("");
@@ -544,12 +591,26 @@ async function openFolders() {
   $("foldersDlg").showModal();
   pickerLoad(pickerCurrent?.path || store.get("lastDir", ""));
 }
+const libOptions = sel => libs.map(l => `<option value="${l.id}"${String(l.id) === String(sel) ? " selected" : ""}>${esc(l.name)}</option>`).join("");
 async function renderRoots() {
-  const roots = await get("roots");
+  const [roots, all] = await Promise.all([get("roots"), get("libraries")]);
+  setLibs(all);
+  const many = libs.length > 1;
   $("rootList").innerHTML = roots.length ? roots.map(r => `<li><span><code>${esc(r.path)}</code><br><span class="muted">${r.books} books${r.missing ? `, ${r.missing} missing` : ""}</span></span>
-    <span><button data-rescan="${r.id}">Rescan</button> <button class="danger" data-remove="${r.id}">Remove</button></span></li>`).join("")
+    <span>${many ? `<select data-move="${r.id}" aria-label="Library">${libOptions(r.library_id)}</select> ` : ""}<button data-rescan="${r.id}">Rescan</button> <button class="danger" data-remove="${r.id}">Remove</button></span></li>`).join("")
     : `<li class="muted">No folders yet.</li>`;
+  const keep = $("addTo").value || curLib;
+  $("addTo").innerHTML = libOptions(keep);
+  $("addToWrap").hidden = !many;
 }
+$("rootList").onchange = async e => {
+  const sel = e.target.closest("[data-move]");
+  if (!sel) return;
+  try {
+    await post("move-root", { id: +sel.dataset.move, library_id: +sel.value });
+    say($("foldersMsg"), "Moved."); loadFacets(); route();
+  } catch (err) { say($("foldersMsg"), err.message, true); renderRoots(); }
+};
 $("rootList").onclick = async e => {
   const rs = e.target.closest("[data-rescan]"), rm = e.target.closest("[data-remove]");
   try {
@@ -577,7 +638,7 @@ $("pickerGo").onclick = () => pickerLoad($("pickerPath").value);
 $("pickerPath").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); pickerLoad($("pickerPath").value); } };
 $("addRoot").onclick = async () => {
   try {
-    const r = await post("add-root", { path: pickerCurrent?.path || $("pickerPath").value });
+    const r = await post("add-root", { path: pickerCurrent?.path || $("pickerPath").value, library_id: $("addTo").value || null });
     store.set("lastDir", r.path);
     say($("foldersMsg"), `Added ${r.path}. Scanning…`);
     poll();
@@ -593,6 +654,48 @@ $("removeMissing").onclick = async () => {
 };
 $("openFolders").onclick = openFolders;
 
+/* ------------------------------------------------------------------ libraries */
+async function openLibraries() {
+  await renderLibraries();
+  say($("libMsg"), "");
+  $("librariesDlg").showModal();
+}
+async function renderLibraries() {
+  const all = await get("libraries");
+  setLibs(all);
+  $("libList").innerHTML = all.map((l, i) => `<li data-id="${l.id}"><input type="text" value="${esc(l.name)}" maxlength="60" aria-label="Name">
+    <span class="muted">${l.roots} folder${l.roots === 1 ? "" : "s"}, ${l.books} books</span>
+    <span><button data-up ${i ? "" : "disabled"} title="Move left">↑</button> <button data-down ${i < all.length - 1 ? "" : "disabled"} title="Move right">↓</button>
+    <button data-rename>Rename</button> <button class="danger" data-drop ${l.roots || all.length < 2 ? "disabled" : ""} title="${l.roots ? "Move or remove its folders first" : "Remove"}">Remove</button></span></li>`).join("");
+}
+$("libList").onclick = async e => {
+  const li = e.target.closest("li[data-id]"), btn = e.target.closest("button");
+  if (!li || !btn) return;
+  const id = +li.dataset.id, ids = [...$("libList").querySelectorAll("li[data-id]")].map(x => +x.dataset.id), i = ids.indexOf(id);
+  try {
+    if (btn.matches("[data-rename]")) await post("rename-library", { id, name: li.querySelector("input").value });
+    else if (btn.matches("[data-drop]")) { if (!confirm("Remove this library?")) return; await post("remove-library", { id }); }
+    else if (btn.matches("[data-up], [data-down]")) {
+      const j = btn.matches("[data-up]") ? i - 1 : i + 1;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      await post("order-libraries", { order: ids });
+    } else return;
+    say($("libMsg"), "Saved.");
+    await renderLibraries();
+    if ($("foldersDlg").open) renderRoots();
+  } catch (err) { say($("libMsg"), err.message, true); }
+};
+$("libAddForm").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    const l = await post("add-library", { name: $("libNew").value });
+    $("libNew").value = ""; say($("libMsg"), `Added ${l.name}. Put folders in it from Folders.`);
+    await renderLibraries();
+    if ($("foldersDlg").open) renderRoots();
+  } catch (err) { say($("libMsg"), err.message, true); }
+};
+$("openLibraries").onclick = openLibraries;
+
 /* ------------------------------------------------------------------ permissions */
 // What this user may do. Standalone, everything; inside harbor, from its roles.
 let can = { edit: true, manage: true };
@@ -601,6 +704,8 @@ function applyCan(next) {
   can = next;
   $("openFolders").hidden = !can.manage;
   if (!can.manage && $("foldersDlg").open) $("foldersDlg").close();
+  if (!can.manage && $("librariesDlg").open) $("librariesDlg").close();
+  renderLibTabs();
   if (location.hash) route();
 }
 
@@ -630,10 +735,13 @@ async function pollState() {
   try {
     const st = await fetch("/api/state").then(r => { if (signedOut(r)) throw new Error("signed out"); return r.json(); });
     applyCan(st.library_can);
+    setLibs(st.library_list);
     if (st.library_prefs) serverText = st.library_prefs;
     const L = st.library, scan = L.scan;
     scanRunning = scan.running;
-    $("counts").textContent = `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
+    const tab = curLib && libs.find(l => String(l.id) === String(curLib));
+    $("counts").textContent = tab ? `${tab.books} book${tab.books === 1 ? "" : "s"} in ${tab.name}`
+      : `${L.series} series · ${L.books} books` + (L.missing ? ` · ${L.missing} missing` : "");
     $("scanChip").hidden = !scan.running;
     $("cancelScan").hidden = !scan.running;
     if (scan.running) $("scanChip").innerHTML = `scanning <b>${scan.done}/${scan.total}</b>`;

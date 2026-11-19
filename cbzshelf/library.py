@@ -124,7 +124,17 @@ MIGRATIONS = [
     # book in order (series covers).
     """CREATE INDEX books_missing_root ON books(missing, root_id);
        CREATE INDEX books_series_missing_sort ON books(series_id, missing, sort_key)""",
+    # 6 (0.5.0): named libraries, each holding one or more folders (shown as tabs). Every folder
+    # so far goes into one library called "Library". roots.library_id has no REFERENCES clause:
+    # SQLite only adds one with a NULL default; the code keeps it pointing at a library.
+    """CREATE TABLE libraries (
+           id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+           position INTEGER NOT NULL DEFAULT 0, added_at REAL NOT NULL);
+       INSERT INTO libraries(id, name, position, added_at) VALUES (1, 'Library', 0, CAST(strftime('%s', 'now') AS REAL));
+       ALTER TABLE roots ADD COLUMN library_id INTEGER NOT NULL DEFAULT 1;
+       CREATE INDEX roots_library ON roots(library_id)""",
 ]
+LIBRARY_NAME_MAX = 60
 # The text reader's settings: name -> check. None as a value removes a setting.
 TEXT_PREFS = {
     "text_size": lambda v: isinstance(v, int) and not isinstance(v, bool) and 70 <= v <= 220,
@@ -223,14 +233,16 @@ class Library:
     # ------------------------------------------------------------ roots
     def roots(self) -> list[dict]:
         rows = self._q(
-            """SELECT r.id, r.path, r.added_at,
+            """SELECT r.id, r.path, r.added_at, r.library_id,
                       (SELECT count(*) FROM books b WHERE b.root_id = r.id AND b.missing = 0) AS books,
                       (SELECT count(*) FROM books b WHERE b.root_id = r.id AND b.missing = 1) AS missing
                FROM roots r ORDER BY r.path"""
         )
         return [dict(r) for r in rows]
 
-    def add_root(self, raw: str) -> dict:
+    def add_root(self, raw: str, library_id: int | None = None) -> dict:
+        """Add a folder to a library (by default the first one) and scan it."""
+        library_id = self._library_id(library_id)
         path = normalize_path(raw)
         if not path.is_dir():
             raise ValueError(f"not a folder: {path}")
@@ -242,11 +254,12 @@ class Library:
                 raise ValueError(f"overlaps a library folder: {other}")
         with self._lock:
             cur = self._db.execute(
-                "INSERT INTO roots(path, added_at) VALUES (?, ?)", (str(path), time.time())
+                "INSERT INTO roots(path, added_at, library_id) VALUES (?, ?, ?)",
+                (str(path), time.time(), library_id),
             )
             root_id = cur.lastrowid
         self.scan(root_id)
-        return {"id": root_id, "path": str(path)}
+        return {"id": root_id, "path": str(path), "library_id": library_id}
 
     def remove_root(self, root_id: int) -> bool:
         """Forget a folder and everything in it (books, edits, progress). Files are not touched."""
@@ -261,6 +274,111 @@ class Library:
             self._drop_orphan_favourites()
             self._db.execute("COMMIT")
         return bool(n)
+
+    # ------------------------------------------------------------ libraries
+    def libraries(self, libraries=None, counts: bool = True) -> list[dict]:
+        """The libraries (all, or those with ids in ``libraries``) in tab order. With ``counts``,
+        how many books (not missing) and folders each has."""
+        where, args = (
+            ("1=1", [])
+            if libraries is None
+            else (
+                f"l.id IN ({','.join('?' * len(libraries))})" if libraries else "0",
+                [int(i) for i in libraries],
+            )
+        )
+        extra = (
+            """, (SELECT count(*) FROM books b JOIN roots r ON r.id = b.root_id
+                    WHERE r.library_id = l.id AND b.missing = 0) AS books,
+                 (SELECT count(*) FROM roots r WHERE r.library_id = l.id) AS roots"""
+            if counts
+            else ""
+        )
+        rows = self._q(
+            f"SELECT l.id, l.name{extra} FROM libraries l WHERE {where} ORDER BY l.position, lower(l.name)",
+            args,
+        )
+        return [dict(r) for r in rows]
+
+    def _library_id(self, library_id) -> int:
+        """An existing library's id; None gives the first one."""
+        if library_id is None or library_id == "":
+            row = self._one("SELECT id FROM libraries ORDER BY position, lower(name) LIMIT 1")
+        else:
+            row = self._one("SELECT id FROM libraries WHERE id = ?", (int(library_id),))
+        if not row:
+            raise KeyError(f"no library {library_id}")
+        return row["id"]
+
+    def add_library(self, name: str) -> dict:
+        name = _library_name(name)
+        with self._lock:
+            pos = self._db.execute("SELECT coalesce(max(position), -1) + 1 FROM libraries").fetchone()[0]
+            try:
+                lid = self._db.execute(
+                    "INSERT INTO libraries(name, position, added_at) VALUES (?, ?, ?)",
+                    (name, pos, time.time()),
+                ).lastrowid
+            except sqlite3.IntegrityError:
+                raise ValueError(f"there is already a library called {name}") from None
+        return {"id": lid, "name": name}
+
+    def rename_library(self, library_id: int, name: str) -> dict:
+        library_id, name = self._library_id(library_id), _library_name(name)
+        with self._lock:
+            try:
+                self._db.execute("UPDATE libraries SET name = ? WHERE id = ?", (name, library_id))
+            except sqlite3.IntegrityError:
+                raise ValueError(f"there is already a library called {name}") from None
+        return {"id": library_id, "name": name}
+
+    def order_libraries(self, ids: list) -> list[dict]:
+        """Put the tabs in this order. ``ids`` must name every library once."""
+        if not isinstance(ids, list):
+            raise ValueError("order must be a list of library ids")
+        ids = [int(i) for i in ids]
+        with self._lock:
+            have = {r[0] for r in self._db.execute("SELECT id FROM libraries")}
+            if sorted(ids) != sorted(have):
+                raise ValueError("the order must list every library once")
+            self._db.execute("BEGIN")
+            for pos, lid in enumerate(ids):
+                self._db.execute("UPDATE libraries SET position = ? WHERE id = ?", (pos, lid))
+            self._db.execute("COMMIT")
+        return self.libraries(counts=False)
+
+    def remove_library(self, library_id: int) -> bool:
+        """Delete an empty library. One with folders is refused: removing a folder forgets its
+        books, edits and progress, so that stays a separate step. The last library stays."""
+        library_id = self._library_id(library_id)
+        with self._lock:
+            if self._db.execute("SELECT count(*) FROM libraries").fetchone()[0] <= 1:
+                raise ValueError("the last library can't be removed")
+            if self._db.execute("SELECT 1 FROM roots WHERE library_id = ?", (library_id,)).fetchone():
+                raise ValueError("move or remove this library's folders first")
+            return bool(self._db.execute("DELETE FROM libraries WHERE id = ?", (library_id,)).rowcount)
+
+    def move_root(self, root_id: int, library_id: int) -> dict:
+        """Move a folder, with its books, edits and progress, to another library."""
+        library_id = self._library_id(library_id)
+        with self._lock:
+            if not self._db.execute(
+                "UPDATE roots SET library_id = ? WHERE id = ?", (library_id, int(root_id))
+            ).rowcount:
+                raise KeyError(f"no folder {root_id}")
+        return {"id": int(root_id), "library_id": library_id}
+
+    def check_visible(self, kind: str, item_id: int, libraries) -> None:
+        """Raise KeyError, as for an id that doesn't exist, if a book or series isn't in one of
+        ``libraries`` (None: every library)."""
+        if libraries is None:
+            return
+        table = {"book": "books", "series": "series"}.get(kind)
+        if table is None:
+            raise ValueError("kind must be series or book")
+        where, args = _in_libraries(libraries, "x.root_id")
+        if not self._one(f"SELECT 1 FROM {table} x WHERE x.id = ? AND {where}", (int(item_id), *args)):
+            raise KeyError(f"no {kind} {item_id}")
 
     def _root_paths(self) -> list[dict]:
         """Every folder's id and path, without the book counts ``roots()`` adds."""
@@ -611,8 +729,10 @@ class Library:
         offset: int = 0,
         favourite: bool = False,
         user: int = 0,
+        libraries=None,
     ) -> dict:
-        where, args = ["1=1"], []
+        lw, where_args = _in_libraries(libraries, "s.root_id")
+        where, args = [lw], list(where_args)
         if favourite:
             where.append("s.id IN (SELECT item_id FROM favourites WHERE kind = 'series' AND user_id = ?)")
             args.append(int(user))
@@ -720,8 +840,10 @@ class Library:
         offset: int = 0,
         favourite: bool = False,
         user: int = 0,
+        libraries=None,
     ) -> dict:
-        where, args = ["1=1"], []
+        lw, where_args = _in_libraries(libraries, "b.root_id")
+        where, args = [lw], list(where_args)
         if favourite:
             where.append("b.id IN (SELECT item_id FROM favourites WHERE kind = 'book' AND user_id = ?)")
             args.append(int(user))
@@ -742,20 +864,25 @@ class Library:
         total = self._one(f"SELECT count(*) FROM books b WHERE {w}", args)[0]
         return {"items": [self._book_dict(r) for r in rows], "total": total}
 
-    def continue_reading(self, limit: int = 12, user: int = 0) -> list[dict]:
+    def continue_reading(self, limit: int = 12, user: int = 0, libraries=None) -> list[dict]:
+        lw, largs = _in_libraries(libraries, "b.root_id")
         rows = self._q(
             f"""SELECT {self.BOOK_COLS} FROM {self.BOOK_FROM}
-                WHERE p.finished = 0 AND p.hidden = 0 AND b.missing = 0 ORDER BY p.updated_at DESC LIMIT ?""",
-            (int(user), int(user), int(limit)),
+                WHERE p.finished = 0 AND p.hidden = 0 AND b.missing = 0 AND {lw}
+                ORDER BY p.updated_at DESC LIMIT ?""",
+            (int(user), int(user), *largs, int(limit)),
         )
         return [self._book_dict(r) for r in rows]
 
-    def hide_continue(self, book_id: int | None = None, user: int = 0) -> int:
-        """Leave a book (or, with no id, every book) out of Continue reading. The progress is kept,
-        and reading the book again brings it back. Returns how many were hidden."""
+    def hide_continue(self, book_id: int | None = None, user: int = 0, libraries=None) -> int:
+        """Leave a book (or, with no id, every book in ``libraries``) out of Continue reading. The
+        progress is kept, and reading the book again brings it back. Returns how many were hidden."""
         with self._lock:
             if book_id is None:
-                sql, args = "UPDATE progress SET hidden = 1 WHERE user_id = ? AND hidden = 0", (int(user),)
+                lw, largs = _in_libraries(libraries, "root_id")
+                sql = f"""UPDATE progress SET hidden = 1 WHERE user_id = ? AND hidden = 0
+                          AND book_id IN (SELECT id FROM books WHERE {lw})"""
+                args = (int(user), *largs)
             else:
                 sql, args = (
                     "UPDATE progress SET hidden = 1 WHERE user_id = ? AND book_id = ?",
@@ -860,23 +987,28 @@ class Library:
                 )
         return bool(on)
 
-    def facets(self, limit: int = 200) -> dict:
+    def facets(self, limit: int = 200, libraries=None) -> dict:
+        lw, largs = _in_libraries(libraries, "b.root_id")
         out = {}
         for field in ("tags", "authors"):
             rows = self._q(
                 f"""SELECT j.value AS value, count(*) AS n FROM books b, json_each(b.meta_json, '$.{field}') j
-                    WHERE b.missing = 0 GROUP BY j.value ORDER BY n DESC, lower(j.value) LIMIT ?""",
-                (int(limit),),
+                    WHERE b.missing = 0 AND {lw} GROUP BY j.value ORDER BY n DESC, lower(j.value) LIMIT ?""",
+                (*largs, int(limit)),
             )
             out[field] = [{"value": r["value"], "n": r["n"]} for r in rows]
         return out
 
-    def summary(self) -> dict:
+    def summary(self, libraries=None) -> dict:
+        """Counts for the libraries in ``libraries`` (None: all), and the scan's state."""
+        bw, bargs = _in_libraries(libraries, "root_id")
+        rw, rargs = _in_libraries(libraries, "id")
         r = self._one(
-            """SELECT (SELECT count(*) FROM books WHERE missing = 0) AS books,
-                      (SELECT count(*) FROM books WHERE missing = 1) AS missing,
-                      (SELECT count(*) FROM series) AS series,
-                      (SELECT count(*) FROM roots) AS roots"""
+            f"""SELECT (SELECT count(*) FROM books WHERE missing = 0 AND {bw}) AS books,
+                       (SELECT count(*) FROM books WHERE missing = 1 AND {bw}) AS missing,
+                       (SELECT count(*) FROM series WHERE {bw}) AS series,
+                       (SELECT count(*) FROM roots WHERE {rw}) AS roots""",
+            (*bargs, *bargs, *bargs, *rargs),
         )
         return {**dict(r), "scan": dict(self.scan_state)}
 
@@ -1139,3 +1271,24 @@ def _fts_query(q: str) -> str:
     if not words:
         raise ValueError("search needs at least one letter or number")
     return " ".join(f'"{w}"*' for w in words[:20])
+
+
+def _in_libraries(libraries, root_col: str) -> tuple[str, list]:
+    """SQL limiting ``root_col`` (a root id column) to folders of ``libraries`` (ids). None means
+    every library; an empty set matches nothing."""
+    if libraries is None:
+        return "1=1", []
+    ids = sorted({int(i) for i in libraries})
+    if not ids:
+        return "0", []
+    marks = ",".join("?" * len(ids))
+    return f"{root_col} IN (SELECT id FROM roots WHERE library_id IN ({marks}))", ids
+
+
+def _library_name(raw) -> str:
+    name = " ".join(str(raw or "").split())
+    if not name:
+        raise ValueError("give the library a name")
+    if len(name) > LIBRARY_NAME_MAX:
+        raise ValueError(f"a library name is at most {LIBRARY_NAME_MAX} characters")
+    return name

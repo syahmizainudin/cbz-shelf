@@ -247,6 +247,140 @@ class PermissionTests(Base):
         self.assertEqual(self.api.post("edit-series", {"id": sid, "changes": {"name": "X"}})[0], 200)
 
 
+class LibraryTabTests(Base):
+    """Named libraries (tabs), and ``visible``: a book or series in a library the user can't see is
+    left out of every list and count, and answers 404 by id."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = self.dir / "Novels"
+        make_cbz(self.other / "Red" / "Red 1.cbz", n_pages=3, info=comicinfo(Writer="B. Writer", Tags="fire"))
+        self.lib = Library(self.db, self.dir / "thumbs")
+        self.lib.add_root(str(self.root))
+        self.novels = self.lib.add_library("Novels")["id"]
+        self.lib.add_root(str(self.other), self.novels)
+        self.lib.wait_scan(30)
+        self.visible = None
+        self.perms = {"library.read", "library.edit", "library.manage"}
+        self.api = LibraryAPI(
+            self.lib, user_of=lambda: 3, can=lambda p: p in self.perms, visible=lambda: self.visible
+        )
+        self.red = self.lib.search(q="Red")["items"][0]
+        self.blue = self.lib.search(q="Blue")["items"][0]
+
+    def tearDown(self):
+        self.lib.close()
+        super().tearDown()
+
+    def get(self, action, **query):
+        status, _, body = self.api.get(action, {k: str(v) for k, v in query.items()})
+        return status, json.loads(body) if body[:1] in (b"{", b"[") else body
+
+    def test_manage_libraries(self):
+        lib = self.lib
+        self.assertEqual([x["name"] for x in lib.libraries()], ["Library", "Novels"])
+        with self.assertRaisesRegex(ValueError, "already a library"):
+            lib.add_library(" novels ")
+        with self.assertRaisesRegex(ValueError, "name"):
+            lib.add_library("  ")
+        comics = lib.add_library("Comics")["id"]
+        lib.order_libraries([comics, self.novels, 1])
+        self.assertEqual([x["name"] for x in lib.libraries()], ["Comics", "Novels", "Library"])
+        with self.assertRaisesRegex(ValueError, "every library"):
+            lib.order_libraries([comics, 1])
+        lib.rename_library(comics, "Manga")
+        with self.assertRaisesRegex(ValueError, "folders first"):
+            lib.remove_library(self.novels)  # it has a folder: its books would be lost
+        root = next(r for r in lib.roots() if r["library_id"] == self.novels)
+        lib.move_root(root["id"], comics)
+        self.assertEqual(self.get("series", library=comics)[1]["total"], 1)  # moved with its books
+        self.assertTrue(lib.remove_library(self.novels))  # empty now
+        with self.assertRaisesRegex(KeyError, "no library"):
+            lib.add_root(str(self.dir / "elsewhere"), 999)
+        with self.assertRaisesRegex(KeyError, "no library"):
+            lib.move_root(root["id"], 999)
+        with self.assertRaisesRegex(KeyError, "no folder"):
+            lib.move_root(999, 1)
+        lib.move_root(root["id"], 1)
+        lib.remove_library(comics)
+        with self.assertRaisesRegex(ValueError, "last library"):
+            lib.remove_library(1)
+        self.assertEqual(len(self.lib.search()["items"]), 3)  # no book was lost on the way
+
+    def test_library_tab_limits_lists(self):
+        status, body = self.get("series", library=self.novels)
+        self.assertEqual((status, [s["name"] for s in body["items"]]), (200, ["Red"]))
+        self.assertEqual(
+            [b["title"] for b in self.get("search", library=1)[1]["items"]], ["Blue v01", "Blue v02"]
+        )
+        self.assertEqual([t["value"] for t in self.get("facets", library=self.novels)[1]["tags"]], ["fire"])
+        self.api.post("progress", {"id": self.red["id"], "page": 1})
+        self.api.post("progress", {"id": self.blue["id"], "page": 1})
+        self.assertEqual([b["title"] for b in self.get("continue", library=self.novels)[1]], ["Red 1"])
+        self.assertEqual(self.api.post("clear-continue", {"library": self.novels}), (200, {"hidden": 1}))
+        self.assertEqual([b["id"] for b in self.get("continue")[1]], [self.blue["id"]])
+        self.assertEqual(self.get("series")[1]["total"], 2)  # All
+
+    def test_hidden_library_is_invisible(self):
+        self.visible = {1}  # the user may see "Library" only
+        self.perms = {"library.read"}
+        st = self.api.state()
+        self.assertEqual(st["library_list"], [{"id": 1, "name": "Library", "books": 2, "roots": 1}])
+        self.assertEqual((st["library"]["books"], st["library"]["series"], st["library"]["roots"]), (2, 1, 1))
+        self.assertNotIn("root", st["library"]["scan"])  # a path; managers only
+        self.assertEqual([x["id"] for x in self.get("libraries")[1]], [1])
+        self.assertEqual(self.get("series")[1]["total"], 1)
+        self.assertEqual(self.get("series", library=self.novels)[1]["total"], 0)
+        self.assertEqual(self.get("search", q="Red")[1]["total"], 0)
+        self.assertNotIn("fire", [t["value"] for t in self.get("facets")[1]["tags"]])
+        rid, sid = self.red["id"], self.red["series_id"]
+        for action, query in (
+            ("book", {"id": rid}),
+            ("series-detail", {"id": sid}),
+            ("page", {"book": rid, "n": 0}),
+            ("thumb", {"book": rid}),
+            ("chapter", {"book": rid, "n": 0}),
+            ("res", {"book": rid, "path": "x.css"}),
+        ):
+            self.assertEqual(self.get(action, **query)[0], 404, action)
+        self.perms = {"library.read", "library.edit"}
+        for action, body in (
+            ("progress", {"id": rid, "page": 1}),
+            ("clear-progress", {"id": rid}),
+            ("hide-continue", {"id": rid}),
+            ("reader-settings", {"id": sid, "changes": {"fit": "width"}}),
+            ("favourite", {"kind": "book", "id": rid}),
+            ("favourite", {"kind": "series", "id": sid}),
+            ("edit-book", {"id": rid, "changes": {"title": "X"}}),
+            ("edit-series", {"id": sid, "changes": {"name": "X"}}),
+        ):
+            series = action in ("reader-settings", "edit-series") or body.get("kind") == "series"
+            expected = f"no series {sid}" if series else f"no book {rid}"
+            self.assertEqual(self.api.post(action, body), (404, {"error": expected}), action)
+        self.assertEqual(self.lib.book_detail(rid, user=3)["progress"], None)  # nothing was saved
+        self.assertEqual(self.lib.book_detail(rid)["title"], "Red 1")
+        # the visible library still works
+        self.assertEqual(self.get("book", id=self.blue["id"])[0], 200)
+        self.assertEqual(self.api.post("progress", {"id": self.blue["id"], "page": 1})[0], 200)
+        self.visible = set()
+        self.assertEqual(self.get("series")[1]["total"], 0)
+        self.assertEqual(self.api.state()["library_list"], [])
+
+    def test_library_actions_need_manage(self):
+        self.perms = {"library.read", "library.edit"}
+        for action, body in (
+            ("add-library", {"name": "X"}),
+            ("rename-library", {"id": 1, "name": "X"}),
+            ("order-libraries", {"order": [1]}),
+            ("remove-library", {"id": self.novels}),
+            ("move-root", {"id": 1, "library_id": self.novels}),
+        ):
+            self.assertEqual(self.api.post(action, body)[0], 403, action)
+        self.perms.add("library.manage")
+        self.assertEqual(self.api.post("add-library", {"name": "X"})[1]["name"], "X")
+        self.assertEqual(self.api.post("remove-library", {"id": 999})[0], 404)
+
+
 class CliTests(Base):
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -262,7 +396,7 @@ class CliTests(Base):
         self.assertEqual(code, 0, out)
         self.assertIn("2 added", out)
         code, out, _ = self.run_cli("roots")
-        self.assertIn("(2 books)", out)
+        self.assertIn("(Library: 2 books)", out)
         code, out, _ = self.run_cli("search", "writer")
         self.assertIn("Blue v01", out)
         self.assertIn("1 match(es)", out)

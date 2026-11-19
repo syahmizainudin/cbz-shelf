@@ -1,4 +1,4 @@
-"""Command line: ``cbz-shelf ui``, ``add``, ``scan``, ``roots`` and ``search``."""
+"""Command line: ``cbz-shelf ui``, ``add``, ``scan``, ``roots``, ``libraries`` and ``search``."""
 
 from __future__ import annotations
 
@@ -31,9 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("add", help="add a folder to the library and scan it")
     a.add_argument("folder")
+    a.add_argument("--library", metavar="NAME", help="put it in this library (made if it doesn't exist)")
     s = sub.add_parser("scan", help="rescan every folder (or one) for new, changed and missing books")
     s.add_argument("folder", nargs="?", help="only this library folder")
     sub.add_parser("roots", help="list the library's folders")
+    sub.add_parser("libraries", help="list the libraries (the tabs on the page)")
     q = sub.add_parser("search", help="search titles, series, authors and tags")
     q.add_argument("words", nargs="+")
     return ap
@@ -55,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "ui":
             return cmd_ui(lib, args)
         if args.cmd == "add":
-            root = lib.add_root(args.folder)
+            library_id = None
+            if args.library:
+                named = [x for x in lib.libraries(counts=False) if x["name"].lower() == args.library.lower()]
+                library_id = named[0]["id"] if named else lib.add_library(args.library)["id"]
+            root = lib.add_root(args.folder, library_id)
             print(f"Added {root['path']}; scanning…", flush=True)
             lib.wait_scan()
             _print_scan(lib)
@@ -74,11 +80,15 @@ def main(argv: list[str] | None = None) -> int:
             _print_scan(lib)
         elif args.cmd == "roots":
             roots = lib.roots()
+            names = {x["id"]: x["name"] for x in lib.libraries(counts=False)}
             for r in roots:
                 missing = f", {r['missing']} missing" if r["missing"] else ""
-                print(f"{r['path']}  ({r['books']} books{missing})")
+                print(f"{r['path']}  ({names.get(r['library_id'], '?')}: {r['books']} books{missing})")
             if not roots:
                 print("No folders yet: cbz-shelf add <folder>")
+        elif args.cmd == "libraries":
+            for x in lib.libraries():
+                print(f"{x['name']}  ({x['roots']} folder(s), {x['books']} books)")
         elif args.cmd == "search":
             res = lib.search(" ".join(args.words), limit=50)
             for b in res["items"]:

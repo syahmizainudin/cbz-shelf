@@ -305,7 +305,9 @@ class MigrationTests(unittest.TestCase):
             saved, L.MIGRATIONS = L.MIGRATIONS, L.MIGRATIONS[:4]  # a 0.4.1 database
             try:
                 lib = Library(db, tmp / "thumbs")
-                lib.add_root(str(tmp / "C"))
+                # add_root needs migration 6's libraries; a 0.4.1 database adds folders like this
+                lib._db.execute("INSERT INTO roots(path, added_at) VALUES (?, 0)", (str(tmp / "C"),))
+                lib.scan()
                 lib.wait_scan(30)
                 bid = lib.search()["items"][0]["id"]
                 lib.edit_book(bid, {"title": "Mine"})
@@ -322,6 +324,40 @@ class MigrationTests(unittest.TestCase):
             self.assertLessEqual({"books_missing_root", "books_series_missing_sort"}, indexes)
             b = lib.book_detail(bid, user=3)
             self.assertEqual((b["title"], b["progress"]["page"]), ("Mine", 2))
+
+    def test_0_4_database_gets_one_library_holding_every_folder(self):
+        from cbzshelf import library as L
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            db = tmp / "old.db"
+            for name in ("A", "B"):
+                make_cbz(tmp / name / "S" / "a.cbz", n_pages=3)
+            saved, L.MIGRATIONS = L.MIGRATIONS, L.MIGRATIONS[:5]  # a 0.4.3 database
+            try:
+                lib = Library(db, tmp / "thumbs")
+                for name in ("A", "B"):
+                    lib._db.execute("INSERT INTO roots(path, added_at) VALUES (?, 0)", (str(tmp / name),))
+                lib.scan()
+                lib.wait_scan(30)
+                bid = lib.search()["items"][0]["id"]
+                lib.edit_book(bid, {"title": "Mine"})
+                lib.set_progress(bid, 1, user=2)
+                lib.set_favourite("book", bid, user=2)
+                lib.close()
+            finally:
+                L.MIGRATIONS = saved
+
+            lib = Library(db, tmp / "thumbs")
+            self.addCleanup(lib.close)
+            self.assertEqual(lib._q("PRAGMA user_version")[0][0], len(L.MIGRATIONS))
+            self.assertEqual(
+                [(x["id"], x["name"], x["roots"], x["books"]) for x in lib.libraries()],
+                [(1, "Library", 2, 2)],
+            )
+            self.assertEqual({r["library_id"] for r in lib.roots()}, {1})
+            b = lib.book_detail(bid, user=2)
+            self.assertEqual((b["title"], b["progress"]["page"], b["favourite"]), ("Mine", 1, True))
 
 
 if __name__ == "__main__":
