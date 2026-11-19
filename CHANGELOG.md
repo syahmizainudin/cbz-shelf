@@ -4,6 +4,8 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.5.0
+
 - **Libraries as tabs:** split the library into named libraries (Manga, Novels…), each holding one or more folders. They show as tabs above the filters, next to **All**, and a tab limits series, search, filters, Continue reading and Favourites to that library. **Libraries…** adds, renames, reorders and removes them, and **Folders** moves a folder to another library (keeping its books, edits and progress) and adds new folders to the library you pick. Migration 6 puts every existing folder in one library called "Library", so nothing changes until you add another. `cbz-shelf add --library NAME`, `cbz-shelf libraries`.
 - **For hosts:** `LibraryAPI(visible=)` limits a request to some libraries. Books and series in the others are left out of every list and count and answer 404 by id. New actions `libraries` (GET), `add-library`, `rename-library`, `order-libraries`, `remove-library` and `move-root` (`library.manage`); `add-root` takes `library_id`; `series`, `search`, `continue`, `facets` and `clear-continue` take `library`. `/api/state` has `library_list`, and leaves out the path of the folder being scanned unless the user has `library.manage`.
 
