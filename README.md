@@ -36,6 +36,7 @@ cbz-shelf ui --open              # http://127.0.0.1:8767/
 
 - **Books:** every `.cbz`, `.zip` and `.epub` under a library folder, including subfolders. Hidden folders are skipped. `.cbr` (RAR) files aren't supported; convert them to `.cbz` first.
 - **Series:** each folder of archives is a series named after the folder. If an archive's `ComicInfo.xml` has a `Series`, that wins, so two files in one folder can belong to different series. Books are ordered by volume, then number, then file name (with `2` before `10`).
+- **Compilation folders:** a folder of unrelated books (one-shots, a mixed collection) isn't a series. On its series page, **Folder is a compilation** (library managers only) groups that folder's books by the series name in each file name instead: `Batman 001.cbz` and `Batman 002.cbz` make *Batman*, and `The Hobbit.cbz` is a series of one. The name is the file name without brackets, volume or chapter markers and the last number. `ComicInfo.xml` still wins, subfolders are not affected, and new books in the folder are grouped the same way. **Folder is one series** undoes it. Either way the folder's old series, with their own edits, favourites and reader settings, are replaced; books keep their edits and progress.
 - **Numbers:** taken from `ComicInfo.xml`, or else from the file name:
 
   | File name | Read as |

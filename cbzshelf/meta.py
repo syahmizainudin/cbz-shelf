@@ -122,6 +122,24 @@ def parse_filename(stem: str) -> dict:
     return meta
 
 
+_SERIES_TAIL = re.compile(r"[\s\-_#.,:;~]+$")
+
+
+def guess_series(stem: str) -> str:
+    """A series name from a file name, for grouping a compilation folder's books.
+
+    Bracketed parts, the volume and chapter markers and the last bare number are dropped:
+    ``Batman v01 (2016)`` and ``Batman - Chapter 12`` -> ``Batman``. A name with nothing left
+    after that (``001``) is kept whole.
+    """
+    name = _BRACKETS.sub(" ", stem)
+    name = _VOLUME.sub(" ", name)
+    name = _CHAPTER.sub(" ", name)
+    name = re.sub(r"[\s_]" + _NUM + r"\s*$", " ", " " + name.rstrip())
+    name = _SERIES_TAIL.sub("", " ".join(name.split()))
+    return name or stem.strip() or stem
+
+
 # ---------------------------------------------------------------- layers
 
 

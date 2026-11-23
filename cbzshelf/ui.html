@@ -440,6 +440,8 @@ async function showSeries(id) {
             ${next ? `<button class="primary" data-book="${next.id}">${next.progress ? "Continue" : "Read"} ${esc(numLabel(next) || next.title)}</button>` : ""}
             <button data-fav="series:${s.id}" class="fav-toggle" aria-pressed="${s.favourite}">${s.favourite ? "★ Favourite" : "☆ Favourite"}</button>
             ${can.edit ? `<button data-act="editSeries">Edit series</button>` : ""}
+            ${can.manage && s.grouping === "folder" ? `<button data-act="splitFolder" title="The books in this folder aren't one series: group them by the series name in each file name">Folder is a compilation</button>` : ""}
+            ${can.manage && s.grouping === "compilation" ? `<button data-act="joinFolder" title="Make every book in this folder one series again">Folder is one series</button>` : ""}
             <span class="muted">Reader: ${s.reader.rtl ? "right to left" : "left to right"}, ${s.reader.mode}</span>
           </div>
         </div>
@@ -456,6 +458,8 @@ const actions = {
     refreshRow("cont");
   },
   editSeries: () => openSeriesEdit(),
+  splitFolder: () => setCompilation(true),
+  joinFolder: () => setCompilation(false),
   manageLibs: () => openLibraries(),
 };
 function route() {
@@ -560,6 +564,22 @@ $("bookMark").onclick = async () => {
   else await post("progress", { id: b.id, page: Math.max(b.pages - 1, 0), finished: true });
   $("bookDlg").close(); route();
 };
+
+/* ------------------------------------------------------------------ compilation folders */
+// A compilation folder holds unrelated books: they're grouped by the series name in each file
+// name instead of forming one series. Either way the folder's current series are replaced.
+async function setCompilation(on) {
+  const s = current.series;
+  if (!confirm(on
+    ? `Treat this folder as a compilation? Its ${s.books.length} books will be grouped by the series name in each file name. This series' own name, summary, favourites and reader settings are dropped.`
+    : "Make every book in this folder one series again? The series made from its file names, with their edits, favourites and reader settings, are dropped.")) return;
+  try {
+    const res = await post("set-compilation", { id: s.id, on });
+    loadFacets();
+    if (!on && res.series.length === 1) location.hash = `#series/${res.series[0]}`;
+    else { location.hash = ""; route(); }
+  } catch (e) { alert(e.message); }
+}
 
 /* ------------------------------------------------------------------ series edit */
 function openSeriesEdit() {

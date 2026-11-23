@@ -4,6 +4,10 @@ Each release has a `## <version>` section. The release pipeline publishes that s
 
 ## Unreleased
 
+## 0.6.0
+
+- **Compilation folders:** a folder of unrelated books no longer has to be one series. A library manager marks it with **Folder is a compilation** on its series page, and its books are grouped by the series name guessed from each file name (`Batman 001` → *Batman*, `The Hobbit` → a series of one). ComicInfo `Series` still wins. **Folder is one series** undoes it. Books keep their edits and progress; the folder's replaced series lose their own edits, favourites and reader settings. New action `set-compilation` (`id`, `on`), needs `library.manage`. Database migration 7 adds the `compilations` table.
+
 ## 0.5.3
 
 - Pins cbz-webp 0.5.1 (watch folders there; nothing changes here).

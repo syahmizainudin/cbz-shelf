@@ -34,6 +34,20 @@ class MetaTests(unittest.TestCase):
         for stem, want in cases.items():
             with self.subTest(stem=stem):
                 self.assertEqual(M.parse_filename(stem), want)
+        guesses = {
+            "Batman 001": "Batman",
+            "Batman v01 (2016)": "Batman",
+            "Batman - Chapter 12": "Batman",
+            "Batman #12": "Batman",
+            "[Group] One Piece c012 [en]": "One Piece",
+            "Spider-Man 2099 001": "Spider-Man 2099",
+            "Book_02": "Book",
+            "The Hobbit": "The Hobbit",
+            "001": "001",
+        }
+        for stem, want in guesses.items():
+            with self.subTest(stem=stem):
+                self.assertEqual(M.guess_series(stem), want)
 
     def test_comicinfo(self):
         xml = comicinfo(
@@ -211,6 +225,64 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(broken["pages"], 0)
         self.assertIn("cannot read", broken["error"])
         self.assertEqual(self.lib.scan_state["last"]["errors"], 1)
+
+    def test_compilation_folder_groups_by_file_name(self):
+        comp = self.root / "Collected"
+        make_cbz(comp / "Batman 001.cbz")
+        make_cbz(comp / "Batman 002 (2016).cbz")
+        make_cbz(comp / "The Hobbit.cbz")
+        make_cbz(comp / "Whatever 1.cbz", info=comicinfo(Series="Saga", Number="3"))  # ComicInfo still wins
+        make_cbz(comp / "Sub" / "Batman 003.cbz")  # a subfolder isn't part of it
+        self.lib.scan()
+        self.lib.wait_scan(30)
+        folder = self.series("Collected")
+        self.assertEqual(self.lib.series_detail(folder["id"])["grouping"], "folder")
+        self.lib.set_favourite("series", folder["id"])
+        hobbit = self.book("The Hobbit")["id"]
+        self.lib.set_progress(hobbit, 1)
+        self.lib.edit_book(hobbit, {"title": "There and Back"})
+
+        res = self.lib.set_compilation(folder["id"], True)
+        self.assertEqual(len(res["series"]), 3)  # Batman, The Hobbit, Saga
+        names = {s["name"]: s for s in self.lib.series_list(limit=200)["items"]}
+        self.assertNotIn("Collected", names)
+        batman = self.lib.series_detail(names["Batman"]["id"])
+        self.assertEqual(batman["grouping"], "compilation")
+        self.assertEqual([b["title"] for b in batman["books"]], ["Batman 001", "Batman 002 (2016)"])
+        self.assertEqual(len(self.lib.series_detail(names["Saga"]["id"])["books"]), 3)
+        self.assertEqual(self.lib.series_detail(names["Sub"]["id"])["books"][0]["title"], "Batman 003")
+        self.assertEqual(self.lib.search(q="Hobbit")["items"][0]["series_id"], names["The Hobbit"]["id"])
+        self.assertEqual(self.lib._q("SELECT count(*) FROM favourites")[0][0], 0)  # the folder series is gone
+        detail = self.lib.book_detail(hobbit)  # the book keeps its edits and progress
+        self.assertEqual((detail["title"], detail["progress"]["page"]), ("There and Back", 1))
+
+        # a rescan (unchanged or changed files) and a new file keep the grouping
+        make_cbz(comp / "Batman 004.cbz")
+        make_cbz(comp / "The Hobbit.cbz", n_pages=5)
+        self.lib.scan()
+        self.lib.wait_scan(30)
+        self.assertEqual(len(self.lib.series_detail(self.series("Batman")["id"])["books"]), 3)
+        self.assertNotIn("Collected", [s["name"] for s in self.lib.series_list(limit=200)["items"]])
+        reopened = Library(self.dir / "db" / "lib.db", self.dir / "thumbs2")  # the flag is saved
+        try:
+            self.assertIn(str(comp), reopened._compilations)
+        finally:
+            reopened.close()
+
+        res = self.lib.set_compilation(self.series("Batman")["id"], False)
+        self.assertEqual(len(res["series"]), 2)  # the folder again, and Saga from ComicInfo
+        folder = self.lib.series_detail(self.series("Collected")["id"])
+        self.assertEqual((folder["grouping"], len(folder["books"])), ("folder", 4))
+        self.assertEqual(self.lib.book_detail(hobbit)["progress"]["page"], 1)
+        with self.assertRaisesRegex(ValueError, "ComicInfo"):
+            self.lib.set_compilation(self.series("Saga")["id"], True)
+        with self.assertRaises(KeyError):
+            self.lib.set_compilation(99999, True)
+
+        self.lib.set_compilation(folder["id"], True)
+        self.lib.remove_root(self.lib.roots()[0]["id"])
+        self.assertEqual(self.lib._q("SELECT count(*) FROM compilations")[0][0], 0)
+        self.assertEqual(self.lib._compilations, set())
 
     def test_series_detail_order_and_reader_defaults(self):
         s = self.lib.series_detail(self.series("Naruto")["id"])

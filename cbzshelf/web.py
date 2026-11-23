@@ -62,6 +62,7 @@ POST_NEEDS = {
     "order-libraries": MANAGE,
     "remove-library": MANAGE,
     "move-root": MANAGE,
+    "set-compilation": MANAGE,
 }
 GET_NEEDS = {"roots": MANAGE}
 DENIED = {"error": "you don't have permission for this"}
@@ -83,6 +84,7 @@ POST_ITEM = {
     "clear-progress": ("book", "id"),
     "reader-settings": ("series", "id"),
     "hide-continue": ("book", "id"),
+    "set-compilation": ("series", "id"),
 }
 
 
@@ -253,6 +255,8 @@ class LibraryAPI:
                 return 200, lib.edit_book(int(body["id"]), body.get("changes") or {})
             if action == "edit-series":
                 return 200, lib.edit_series(int(body["id"]), body.get("changes") or {})
+            if action == "set-compilation":
+                return 200, lib.set_compilation(int(body["id"]), body.get("on", True))
             if action == "progress":
                 finished = body.get("finished")
                 return 200, lib.set_progress(

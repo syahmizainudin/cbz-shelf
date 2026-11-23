@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS roots (
 CREATE TABLE IF NOT EXISTS series (
     id INTEGER PRIMARY KEY,
     root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
-    key TEXT UNIQUE NOT NULL,          -- "dir:<folder>" or "ci:<root id>:<series name>"
+    key TEXT UNIQUE NOT NULL,          -- "dir:<folder>", "ci:<root id>:<series name>" or "cp:<folder>:<name>"
     folder TEXT NOT NULL,
     file_name TEXT NOT NULL,           -- folder name or ComicInfo Series
     user_json TEXT NOT NULL DEFAULT '{}');
@@ -133,6 +133,12 @@ MIGRATIONS = [
        INSERT INTO libraries(id, name, position, added_at) VALUES (1, 'Library', 0, CAST(strftime('%s', 'now') AS REAL));
        ALTER TABLE roots ADD COLUMN library_id INTEGER NOT NULL DEFAULT 1;
        CREATE INDEX roots_library ON roots(library_id)""",
+    # 7 (0.6.0): compilation folders. A folder listed here isn't one series: its books are grouped
+    # by the series name guessed from each file name ("cp:<folder>:<name>" series).
+    """CREATE TABLE compilations (
+           folder TEXT PRIMARY KEY,
+           root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+           added_at REAL NOT NULL)""",
 ]
 LIBRARY_NAME_MAX = 60
 # The text reader's settings: name -> check. None as a value removes a setting.
@@ -188,6 +194,8 @@ class Library:
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.executescript(SCHEMA)
             self._migrate()
+            # compilation folders, read on every book a scan writes
+            self._load_compilations()
         self._pages_cache: OrderedDict[tuple[str, float], list[str]] = OrderedDict()
         self._epub_cache: OrderedDict[tuple[str, float], E.EpubBook] = OrderedDict()
         # (path, mtime, chapter) -> whether that chapter is well-formed XHTML
@@ -217,6 +225,13 @@ class Library:
                 raise
 
     # ------------------------------------------------------------ helpers
+    def _load_compilations(self) -> None:
+        """Read the compilation folders into memory. Call with the lock held."""
+        try:
+            self._compilations = {r[0] for r in self._db.execute("SELECT folder FROM compilations")}
+        except sqlite3.OperationalError:  # an older database opened by a test that stops migrating early
+            self._compilations = set()
+
     def _q(self, sql: str, args=()) -> list[sqlite3.Row]:
         with self._lock:
             return self._db.execute(sql, args).fetchall()
@@ -273,6 +288,7 @@ class Library:
             n = self._db.execute("DELETE FROM roots WHERE id = ?", (root_id,)).rowcount
             self._drop_orphan_favourites()
             self._db.execute("COMMIT")
+            self._load_compilations()
         return bool(n)
 
     # ------------------------------------------------------------ libraries
@@ -611,9 +627,14 @@ class Library:
         return None
 
     def _series_for(self, root: dict, f: Path, ci_series: str | None) -> int:
+        """The series a book goes in: its ComicInfo series; in a compilation folder, the series
+        named in its file name; otherwise its folder."""
         folder = str(f.parent)
         if ci_series:
             key, name = f"ci:{root['id']}:{ci_series.strip().lower()}", ci_series.strip()
+        elif folder in self._compilations:
+            name = M.guess_series(f.stem)
+            key = f"cp:{folder}:{name.lower()}"
         else:
             key, name = f"dir:{folder}", f.parent.name or folder
         with self._lock:
@@ -624,6 +645,60 @@ class Library:
                 "INSERT INTO series(root_id, key, folder, file_name) VALUES (?,?,?,?)",
                 (root["id"], key, folder, name),
             ).lastrowid
+
+    def set_compilation(self, series_id: int, on: bool) -> dict:
+        """Mark the folder of a series as a compilation (``on``) or as one series, and regroup its
+        books now. A rescan wouldn't: it skips files that haven't changed.
+
+        Only books' ``series_id`` changes; their edits and progress stay. A series left empty is
+        deleted with its edits, favourites and reader settings, as on any regrouping. Returns the
+        folder and its series ids."""
+        if not isinstance(on, bool):
+            raise ValueError("on must be true or false")
+        with self._lock:
+            s = self._db.execute(
+                "SELECT key, folder, root_id FROM series WHERE id = ?", (series_id,)
+            ).fetchone()
+            if not s:
+                raise KeyError(f"no series {series_id}")
+            if s["key"].startswith("ci:"):
+                raise ValueError("this series comes from the books' ComicInfo, not from a folder")
+            folder = s["folder"]
+            root = dict(self._db.execute("SELECT * FROM roots WHERE id = ?", (s["root_id"],)).fetchone())
+            sep = "" if folder.endswith(os.sep) else os.sep
+            books = [
+                r
+                for r in self._db.execute(
+                    "SELECT id, path, file_json FROM books WHERE root_id = ? AND substr(path, 1, ?) = ?",
+                    (root["id"], len(folder) + len(sep), folder + sep),
+                ).fetchall()
+                if str(Path(r["path"]).parent) == folder
+            ]
+            self._db.execute("BEGIN")
+            try:
+                if on:
+                    self._db.execute(
+                        "INSERT OR IGNORE INTO compilations(folder, root_id, added_at) VALUES (?,?,?)",
+                        (folder, root["id"], time.time()),
+                    )
+                    self._compilations.add(folder)
+                else:
+                    self._db.execute("DELETE FROM compilations WHERE folder = ?", (folder,))
+                    self._compilations.discard(folder)
+                ids: list[int] = []
+                for b in books:
+                    sid = self._series_for(root, Path(b["path"]), json.loads(b["file_json"]).get("series"))
+                    self._db.execute("UPDATE books SET series_id = ? WHERE id = ?", (sid, b["id"]))
+                    self._reindex(b["id"])
+                    if sid not in ids:
+                        ids.append(sid)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                self._load_compilations()
+                raise
+        self._drop_empty_series()
+        return {"compilation": on, "folder": folder, "series": ids}
 
     def _drop_empty_series(self) -> None:
         with self._lock:
@@ -795,6 +870,9 @@ class Library:
             "id": s["id"],
             "folder": s["folder"],
             "file_name": s["file_name"],
+            # where the grouping comes from: "folder", "compilation" (a name in a compilation
+            # folder) or "comicinfo"
+            "grouping": {"dir": "folder", "cp": "compilation", "ci": "comicinfo"}[s["key"].split(":", 1)[0]],
             "name": edits.get("name") or s["file_name"],
             "summary": edits.get("summary", ""),
             "user": edits,
@@ -1024,7 +1102,7 @@ class Library:
                 raise KeyError(f"no book {book_id}")
             if "series" in changes:
                 raise ValueError(
-                    "a book's series comes from its folder or ComicInfo; rename the series instead"
+                    "a book's series comes from its folder, its file name or ComicInfo; rename the series instead"
                 )
             user = M.apply_changes(json.loads(r["user_json"]), changes)
             eff = M.effective(json.loads(r["file_json"]), user)

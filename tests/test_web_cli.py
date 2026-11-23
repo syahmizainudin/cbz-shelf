@@ -357,6 +357,12 @@ class LibraryTabTests(Base):
             series = action in ("reader-settings", "edit-series") or body.get("kind") == "series"
             expected = f"no series {sid}" if series else f"no book {rid}"
             self.assertEqual(self.api.post(action, body), (404, {"error": expected}), action)
+        self.assertEqual(self.api.post("set-compilation", {"id": sid, "on": True})[0], 403)  # managers only
+        self.perms.add("library.manage")
+        self.assertEqual(
+            self.api.post("set-compilation", {"id": sid, "on": True}), (404, {"error": f"no series {sid}"})
+        )
+        self.assertEqual(self.lib._q("SELECT count(*) FROM compilations")[0][0], 0)
         self.assertEqual(self.lib.book_detail(rid, user=3)["progress"], None)  # nothing was saved
         self.assertEqual(self.lib.book_detail(rid)["title"], "Red 1")
         # the visible library still works
